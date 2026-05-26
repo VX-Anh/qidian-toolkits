@@ -1,0 +1,15 @@
+.env
+.venv/
+.claude/settings.local.json
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+backend/db/
+*.db
+*.db-wal
+*.db-shm
+.python-version
+dist/
+build/
+*.egg-info/

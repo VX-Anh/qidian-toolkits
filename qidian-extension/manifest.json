@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Qidian Chapter Scraper",
+  "version": "2.0",
+  "description": "Screenshot chapters from Qidian and OCR via VietPhase backend",
+  "permissions": ["activeTab", "downloads", "storage", "debugger"],
+  "host_permissions": ["https://www.qidian.com/*", "http://localhost:9999/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Qidian Scraper"
+  }
+}
