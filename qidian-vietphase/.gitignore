@@ -5,8 +5,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-backend/db/
-*.db
+# *.db-wal and *.db-shm are WAL/SHM temp files, not needed
 *.db-wal
 *.db-shm
 .python-version
