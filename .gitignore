@@ -1,6 +1,9 @@
 # Claude Code local settings
 .claude/
 
+# PaddleOCR downloaded models
+qidian-ocr/.models/
+
 # Python
 __pycache__/
 *.pyc
