@@ -1,379 +1,47 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>VietPhase</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="/static/css/style.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI-Translate · VietPhase</title>
+  <link rel="stylesheet" href="/static/tokens.css" />
+  <link rel="stylesheet" href="/static/src/styles.css" />
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen">
+<body>
+  <div id="root"></div>
 
-  <!-- Header -->
-  <header class="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <span class="text-2xl font-bold text-indigo-400">VietPhase</span>
-      <span class="text-xs text-gray-500 mt-1">Trung → Việt Agent</span>
-    </div>
-    <div class="flex items-center gap-3">
-      <span id="statusDot" title="Trạng thái server"
-        class="w-2 h-2 rounded-full bg-gray-600 transition-colors duration-500"></span>
-      <select id="novelSelect"
-        class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-indigo-500">
-        <option value="">-- Chọn truyện --</option>
-      </select>
-      <button id="btnNewNovel"
-        class="text-sm bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded transition">
-        + Truyện mới
-      </button>
-    </div>
-  </header>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+    integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+    integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm"
+    crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+    integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+    crossorigin="anonymous"></script>
 
-  <!-- Tabs -->
-  <nav class="border-b border-gray-800 px-6 flex gap-1 pt-1">
-    <button class="tab-btn active" data-tab="chapters">Chương</button>
-    <button class="tab-btn" data-tab="glossary">Thuật ngữ</button>
-    <button class="tab-btn" data-tab="output">Xem bản dịch</button>
-    <button class="tab-btn" data-tab="settings">Cài đặt truyện</button>
-  </nav>
+  <!-- Empty data init (globals populated by app.jsx from real API) -->
+  <script src="/static/src/api_bridge.js"></script>
 
-  <!-- Main -->
-  <main class="px-6 py-4 max-w-7xl mx-auto">
+  <!-- Design system components (order matters — dependencies first) -->
+  <script type="text/babel" data-presets="react" src="/static/src/tweaks-panel.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/components.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/shell.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/chapters.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/translation_view.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/glossary.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/output.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/settings.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/cmdk.jsx"></script>
+  <script type="text/babel" data-presets="react" src="/static/src/app.jsx"></script>
 
-    <!-- ── Tab: Chapters ─────────────────────────────────────────────── -->
-    <section id="tab-chapters" class="tab-content">
-      <div class="flex items-center justify-between mb-3">
-        <div class="flex items-center gap-3">
-          <button id="btnSelectAll" class="text-xs text-gray-400 hover:text-white">Chọn tất cả</button>
-          <button id="btnUpload"
-            class="text-sm bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded transition flex items-center gap-1.5">
-            <span>↑</span> Upload .txt
-          </button>
-          <input id="fileInput" type="file" multiple accept=".txt" class="hidden" />
-          <button id="btnTranslateSelected"
-            class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm font-medium transition disabled:opacity-40"
-            disabled>
-            Dịch đã chọn
-          </button>
-          <button id="btnTranslateAll"
-            class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm font-medium transition">
-            Dịch tất cả
-          </button>
-          <button id="btnRetranslate"
-            class="hidden bg-orange-800 hover:bg-orange-700 px-4 py-2 rounded text-sm font-medium transition">
-            Dịch lại (<span id="retranslateCount">0</span>)
-          </button>
-          <button id="btnCancelJob"
-            class="hidden bg-red-900 hover:bg-red-800 px-4 py-2 rounded text-sm font-medium transition">
-            ✕ Hủy
-          </button>
-        </div>
-        <div class="flex items-center gap-4">
-          <div id="progressBar" class="hidden w-48 h-2 bg-gray-800 rounded-full overflow-hidden">
-            <div id="progressFill" class="h-full bg-indigo-500 transition-all" style="width:0%"></div>
-          </div>
-          <span id="progressText" class="text-sm text-gray-400"></span>
-        </div>
-      </div>
-
-      <!-- Filter row -->
-      <div class="flex items-center gap-3 mb-4">
-        <input id="filterSearch" type="text" placeholder="Tìm theo tên chương..."
-          class="input-field flex-1 max-w-xs" />
-        <select id="filterStatus" class="input-field">
-          <option value="all">Tất cả trạng thái</option>
-          <option value="pending">Chờ</option>
-          <option value="in_progress">Đang dịch</option>
-          <option value="done">Xong</option>
-          <option value="failed">Lỗi</option>
-        </select>
-        <span id="filterCount" class="text-xs text-gray-500 min-w-20"></span>
-      </div>
-
-      <!-- Log stream -->
-      <div id="logContainer" class="hidden mb-4 bg-gray-900 border border-gray-800 rounded">
-        <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
-          <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Log</span>
-          <div class="flex gap-3">
-            <button id="btnClearLog" class="text-xs text-gray-500 hover:text-gray-300 transition">Xóa</button>
-            <button id="btnToggleLog" class="text-xs text-gray-500 hover:text-gray-300 transition">Thu gọn</button>
-          </div>
-        </div>
-        <div id="logBox" class="p-3 h-40 overflow-y-auto text-xs font-mono text-gray-400"></div>
-      </div>
-
-      <!-- Live stream panel -->
-      <div id="streamPanel" class="hidden mb-4 bg-gray-900 border border-indigo-900 rounded">
-        <div class="flex items-center justify-between px-3 py-2 border-b border-gray-800">
-          <div class="flex items-center gap-2">
-            <span id="streamDot" class="w-2 h-2 rounded-full bg-indigo-400 animate-pulse inline-block"></span>
-            <span id="streamTitle" class="text-xs text-indigo-400 font-medium truncate max-w-xs">Đang dịch...</span>
-          </div>
-          <button id="btnClearStream" class="text-xs text-gray-500 hover:text-gray-300 transition">Xóa</button>
-        </div>
-        <div id="streamContent"
-          class="p-4 h-52 overflow-y-auto text-sm text-gray-200 leading-loose whitespace-pre-wrap"
-          style="font-family:Georgia,'Times New Roman',serif"></div>
-      </div>
-
-      <!-- OCR Live Banner (hidden by default) -->
-      <div id="ocrLiveBanner" class="hidden mb-3 rounded border border-indigo-800 bg-gray-900 overflow-hidden">
-        <div class="flex items-center gap-3 px-4 py-2 border-b border-indigo-900">
-          <span class="ocr-spinner"></span>
-          <span class="text-xs font-semibold text-indigo-300">OCR đang xử lý</span>
-          <span id="ocrBannerTitle" class="text-xs text-gray-400 truncate"></span>
-          <span class="ml-auto text-xs text-gray-500" id="ocrBannerCharCount"></span>
-        </div>
-        <div id="ocrBannerPreview"
-          class="px-4 py-2 text-xs text-gray-400 font-mono leading-relaxed max-h-20 overflow-hidden whitespace-pre-wrap"></div>
-      </div>
-
-      <!-- Table -->
-      <div id="chapterDropZone" class="overflow-x-auto rounded border border-gray-800 transition-colors">
-        <table class="w-full text-sm">
-          <thead class="bg-gray-900 text-gray-400 text-xs uppercase">
-            <tr>
-              <th class="w-8 px-3 py-3"><input type="checkbox" id="checkAll" /></th>
-              <th class="px-4 py-3 text-left w-16">Chương</th>
-              <th class="px-4 py-3 text-left">Tên Trung</th>
-              <th class="px-4 py-3 text-left">Tên Việt</th>
-              <th class="px-4 py-3 text-left w-28">Trạng thái</th>
-              <th class="px-4 py-3 text-left w-24">Review</th>
-              <th class="px-4 py-3 text-left w-20">Xem</th>
-            </tr>
-          </thead>
-          <tbody id="chapterTable" class="divide-y divide-gray-800"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ── Tab: Glossary ─────────────────────────────────────────────── -->
-    <section id="tab-glossary" class="tab-content hidden">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold text-gray-300">Bảng thuật ngữ</h2>
-        <button id="btnExtractTerms"
-          class="bg-amber-700 hover:bg-amber-600 px-4 py-2 rounded text-sm transition">
-          Trích xuất thuật ngữ mới
-        </button>
-      </div>
-
-      <!-- Add term form -->
-      <div class="bg-gray-900 border border-gray-800 rounded p-4 mb-4 flex gap-3 flex-wrap">
-        <input id="termZh" placeholder="Tiếng Trung" class="input-field w-36" />
-        <input id="termVi" placeholder="Tiếng Việt" class="input-field w-36" />
-        <select id="termType" class="input-field w-32">
-          <option value="character">Nhân vật</option>
-          <option value="place">Địa danh</option>
-          <option value="realm">Cảnh giới</option>
-          <option value="skill">Kỹ năng</option>
-        </select>
-        <input id="termNotes" placeholder="Ghi chú" class="input-field flex-1 min-w-32" />
-        <button id="btnAddTerm"
-          class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm transition">
-          Thêm
-        </button>
-      </div>
-
-      <div id="glossaryTabs" class="flex gap-1 mb-3 border-b border-gray-800">
-        <button class="glossary-tab active" data-section="characters">Nhân vật</button>
-        <button class="glossary-tab" data-section="places">Địa danh</button>
-        <button class="glossary-tab" data-section="realms">Cảnh giới</button>
-        <button class="glossary-tab" data-section="skills">Kỹ năng</button>
-      </div>
-
-      <div class="overflow-x-auto rounded border border-gray-800">
-        <table class="w-full text-sm">
-          <thead class="bg-gray-900 text-gray-400 text-xs uppercase">
-            <tr>
-              <th class="px-4 py-3 text-left">Tiếng Trung</th>
-              <th class="px-4 py-3 text-left">Tiếng Việt</th>
-              <th class="px-4 py-3 text-left">Ghi chú</th>
-              <th class="w-8"></th>
-            </tr>
-          </thead>
-          <tbody id="glossaryTable" class="divide-y divide-gray-800"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- ── Tab: Output Editor ─────────────────────────────────────────── -->
-    <section id="tab-output" class="tab-content hidden">
-      <div class="flex gap-4" style="height:calc(100vh - 164px)">
-
-        <!-- Sidebar: danh sách chương đã dịch -->
-        <div class="w-56 flex-shrink-0 flex flex-col bg-gray-900 border border-gray-800 rounded overflow-hidden">
-          <div class="px-3 py-2 border-b border-gray-800 flex items-center justify-between">
-            <span class="text-xs font-medium text-gray-500 uppercase tracking-wide">Bản dịch</span>
-            <span id="outputSidebarCount" class="text-xs text-gray-600"></span>
-          </div>
-          <div id="outputSidebar" class="flex-1 overflow-y-auto text-sm"></div>
-        </div>
-
-        <!-- Editor panel -->
-        <div class="flex-1 flex flex-col min-w-0 gap-2">
-
-          <!-- Toolbar (hidden until chapter loaded) -->
-          <div id="outputToolbar" class="hidden items-center justify-between gap-2 flex-shrink-0">
-            <div class="flex items-center gap-1 min-w-0 flex-1">
-              <button id="btnPrevChapter"
-                class="text-gray-500 hover:text-white p-1.5 rounded hover:bg-gray-800 transition flex-shrink-0"
-                title="Chương trước">◀</button>
-              <h2 id="outputTitle" class="text-indigo-300 font-semibold text-sm truncate px-1"></h2>
-              <button id="btnNextChapter"
-                class="text-gray-500 hover:text-white p-1.5 rounded hover:bg-gray-800 transition flex-shrink-0"
-                title="Chương sau">▶</button>
-            </div>
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <span id="outputSaveStatus" class="text-xs text-gray-600 hidden">Đã lưu ✓</span>
-              <button id="btnCopyOutput"
-                class="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded transition">Sao chép</button>
-              <button id="btnDownloadOutput"
-                class="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded transition">Tải xuống</button>
-              <button id="btnSaveEdit"
-                class="text-xs bg-emerald-800 hover:bg-emerald-700 px-3 py-1.5 rounded transition">Lưu chỉnh sửa</button>
-            </div>
-          </div>
-
-          <!-- Textarea editor -->
-          <div class="flex-1 relative min-h-0">
-            <div id="outputPlaceholder"
-              class="absolute inset-0 flex items-center justify-center text-gray-600 text-sm pointer-events-none select-none">
-              Chọn một chương đã dịch để xem và chỉnh sửa.
-            </div>
-            <textarea id="outputEditor"
-              class="w-full h-full bg-gray-900 border border-gray-800 rounded px-8 py-5 resize-none focus:outline-none focus:border-indigo-700 transition-colors leading-loose"
-              spellcheck="false" autocomplete="off"></textarea>
-          </div>
-
-        </div>
-      </div>
-    </section>
-
-    <!-- ── Tab: Settings ─────────────────────────────────────────────── -->
-    <section id="tab-settings" class="tab-content hidden">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="font-semibold text-gray-300">Cài đặt truyện (novel.md)</h2>
-        <button id="btnSaveNovel"
-          class="bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm transition">
-          Lưu
-        </button>
-      </div>
-      <textarea id="novelEditor"
-        class="w-full h-[calc(100vh-280px)] bg-gray-900 border border-gray-800 rounded p-4 text-sm font-mono text-gray-300 focus:outline-none focus:border-indigo-500 resize-none"
-        placeholder="Chọn truyện để chỉnh sửa novel.md..."></textarea>
-    </section>
-
-  </main>
-
-  <!-- ── Translation View (full-page overlay) ─────────────────────────── -->
-  <div id="translationView" class="translation-view hidden">
-    <!-- Header -->
-    <div class="tv-header flex items-center gap-4 px-6 py-3 border-b border-gray-800 bg-gray-950">
-      <button id="btnBackToList"
-        class="flex items-center gap-1.5 text-sm text-gray-400 hover:text-white transition">
-        ← Danh sách
-      </button>
-      <div class="w-px h-4 bg-gray-700"></div>
-      <span id="tvChapterNum" class="text-xs font-mono text-gray-500"></span>
-      <span id="tvChapterTitle" class="font-semibold text-gray-100 truncate max-w-sm"></span>
-      <div class="ml-auto flex items-center gap-3">
-        <span id="tvStatusBadge"></span>
-        <button id="btnTranslateThis"
-          class="text-sm bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 rounded transition flex items-center gap-1.5">
-          ▶ Dịch ngay
-        </button>
-      </div>
-    </div>
-    <!-- Two-column body -->
-    <div class="tv-body">
-      <!-- Left: Pre-translate -->
-      <div class="tv-panel border-r border-gray-800">
-        <!-- OCR Image Filmstrip (hidden if no OCR source) -->
-        <div id="tvImageStrip" class="hidden flex-shrink-0 border-b border-gray-800 bg-gray-900 px-4 py-3">
-          <div class="flex items-center gap-2 mb-2">
-            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Nguồn OCR</span>
-            <span id="tvImageCount" class="text-xs text-gray-500"></span>
-          </div>
-          <div id="tvImageList" class="ocr-filmstrip"></div>
-        </div>
-        <div class="tv-panel-header flex items-center gap-2 px-5 py-2.5 border-b border-gray-800 bg-gray-900">
-          <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">📄 Bản gốc đã thay tên</span>
-          <span id="tvTermCount" class="ml-auto text-xs px-2 py-0.5 rounded-full hidden"
-            style="background:rgba(99,102,241,.15);color:#a5b4fc;border:1px solid rgba(99,102,241,.3)"></span>
-        </div>
-        <div id="tvPreTranslate"
-          class="tv-panel-content text-sm leading-loose text-gray-300 font-mono whitespace-pre-wrap"></div>
-      </div>
-      <!-- Right: Translation output -->
-      <div class="tv-panel">
-        <div class="tv-panel-header flex items-center gap-2 px-5 py-2.5 border-b border-gray-800 bg-gray-900">
-          <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">📝 Bản dịch</span>
-          <span id="tvTranslateStatus" class="ml-auto text-xs text-gray-500"></span>
-        </div>
-        <div id="tvTranslation"
-          class="tv-panel-content text-sm leading-loose text-gray-200 font-serif whitespace-pre-wrap"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Modal: Review Detail -->
-  <div id="modalReview" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
-    <div class="bg-gray-900 border border-gray-800 rounded-lg flex flex-col w-full max-w-xl" style="max-height:75vh">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 flex-shrink-0">
-        <span id="modalReviewTitle" class="text-sm font-medium text-gray-300 truncate"></span>
-        <button id="btnCloseReview" class="text-gray-500 hover:text-white text-lg leading-none ml-4">✕</button>
-      </div>
-      <div id="modalReviewStatus" class="px-5 pt-3 flex-shrink-0"></div>
-      <pre id="modalReviewContent"
-        class="flex-1 overflow-y-auto px-5 py-3 text-sm text-gray-300 leading-relaxed whitespace-pre-wrap"></pre>
-    </div>
-  </div>
-
-  <!-- Modal: Source Viewer -->
-  <div id="modalSource" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
-    <div class="bg-gray-900 border border-gray-800 rounded-lg flex flex-col w-full max-w-3xl" style="max-height:85vh">
-      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 flex-shrink-0">
-        <span id="modalSourceTitle" class="text-sm font-medium text-gray-300 truncate"></span>
-        <button id="btnCloseSource" class="text-gray-500 hover:text-white text-lg leading-none ml-4">✕</button>
-      </div>
-      <pre id="modalSourceContent"
-        class="flex-1 overflow-y-auto px-6 py-4 text-sm text-gray-300 leading-loose whitespace-pre-wrap font-mono"></pre>
-    </div>
-  </div>
-
-  <!-- Modal: New Novel -->
-  <div id="modalNewNovel" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-    <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 w-96 space-y-4">
-      <h3 class="font-semibold text-lg">Tạo truyện mới</h3>
-      <div class="space-y-3">
-        <input id="newSlug" placeholder="slug (vd: thien-dien-quyet)" class="input-field w-full" />
-        <input id="newZhName" placeholder="Tên Trung (vd: 天演诀)" class="input-field w-full" />
-        <input id="newViName" placeholder="Tên Việt (vd: Thiên Diễn Quyết)" class="input-field w-full" />
-        <select id="newGenre" class="input-field w-full">
-          <option value="tiên hiệp">Tiên hiệp</option>
-          <option value="võ hiệp">Võ hiệp</option>
-          <option value="huyền huyễn">Huyền huyễn</option>
-          <option value="đô thị">Đô thị</option>
-        </select>
-      </div>
-      <div class="flex justify-end gap-3 pt-2">
-        <button id="btnCancelNovel" class="text-gray-400 hover:text-white text-sm">Hủy</button>
-        <button id="btnCreateNovel"
-          class="bg-indigo-600 hover:bg-indigo-500 px-4 py-2 rounded text-sm transition">
-          Tạo
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <script src="/static/js/app.js"></script>
   <script>
     // Dev auto-reload: browser tự refresh khi uvicorn restart sau khi save code
     (function () {
       let down = false;
       setInterval(async () => {
         try {
-          await fetch('/_dev/ping', { cache: 'no-store' });
+          await fetch("/_dev/ping", { cache: "no-store" });
           if (down) location.reload();
         } catch { down = true; }
       }, 800);

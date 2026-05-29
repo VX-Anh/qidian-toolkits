@@ -6,15 +6,29 @@ from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from ..agent.novel_loader import load_novel
 from ..agent.orchestrator import parse_chapter_filename
 from ..agent.preprocessor import build_segments
+from ..agent import vietphase_import
 from ..config import settings
 from ..shared import get_state
 
 router = APIRouter(prefix="/api/chapters", tags=["chapters"])
 
 
+@router.post("/import")
+def import_vietphase(novel_slug: str | None = None):
+    """Quét thư mục vietphase/{slug}/{chương}/ và đăng ký các chương ảnh."""
+    state = get_state()
+    imported = vietphase_import.scan(state, settings, novel_slug)
+    return {"imported": len(imported), "files": imported}
+
+
 @router.get("")
 def list_chapters(novel_slug: str | None = None):
     state = get_state()
+    # Tự động import chương ảnh từ vietphase_dir trước khi liệt kê
+    try:
+        vietphase_import.scan(state, settings, novel_slug)
+    except Exception:
+        pass
     if not settings.input_dir.exists():
         return state.get_chapters(novel_slug)
 

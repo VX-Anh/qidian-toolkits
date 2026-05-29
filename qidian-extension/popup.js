@@ -18,12 +18,14 @@ let savedTitle = '';
 const FALLBACK_CROP_X = 600;
 const FALLBACK_CROP_W = 695;
 const CHUNK_H         = 1400;
-const OVERLAP_H       = 40;
+const OVERLAP_H       = 120;
 const SAFE_PADDING    = 20;
 const JPEG_QUALITY    = 95;
 const MAX_RETRY       = 2;
 const PRE_SETTLE_MS   = 600;
 const POST_SCROLL_MS  = 400;
+const MIN_CHUNK_RATIO = 0.55;
+const EXPORT_BASE_DIR = 'data/vietphase';
 
 const DETECT_EXPR = `(function() {
   const SELS = ["main[data-type='cjk']","#j_chapterContent",".read-content",".chapter-content"];
@@ -35,6 +37,9 @@ const DETECT_EXPR = `(function() {
   const paras = Array.from(el.querySelectorAll('p')).filter(p => p.innerText.trim().length > 0);
   const firstP = paras[0];
   const lastP  = paras[paras.length - 1];
+  const paragraphBottoms = paras
+    .map(p => Math.round(p.getBoundingClientRect().bottom + sy))
+    .filter((v, i, a) => Number.isFinite(v) && (i === 0 || v !== a[i - 1]));
   return {
     left:        Math.round(rect.left),
     width:       Math.round(rect.width),
@@ -42,6 +47,7 @@ const DETECT_EXPR = `(function() {
     height:      el.scrollHeight,
     firstPTop:   firstP ? Math.round(firstP.getBoundingClientRect().top + sy)    : null,
     lastPBottom: lastP  ? Math.round(lastP.getBoundingClientRect().bottom + sy)  : null,
+    paragraphBottoms,
   };
 })()` ;
 
@@ -75,6 +81,46 @@ autoOcrEl.addEventListener('change', () =>
 function setStatus(msg)    { statusEl.textContent = msg; }
 function setProgress(pct)  { progressBar.style.width = Math.min(100, pct) + '%'; }
 function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sanitizeFilename(name) {
+  return (name || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+function normalizeSlug(input) {
+  const s = (input || '').trim().toLowerCase();
+  if (!s) return 'unknown';
+  return s
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'unknown';
+}
+function extractChapterNumber(title) {
+  const text = title || '';
+  const patterns = [
+    /第\s*(\d+)\s*章/i,   // Chinese style: 第678章
+    /ch(?:ươ|u)o?ng\s*(\d+)/i, // Vietnamese style: Chương 678
+    /\bchapter\s*(\d+)/i,  // English style: Chapter 678
+    /\b(\d{1,6})\b/,       // fallback: first standalone number
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m?.[1]) return m[1];
+  }
+  return 'unknown';
+}
+function buildExportDir(slug, chapterNumber) {
+  return `${EXPORT_BASE_DIR}/${normalizeSlug(slug)}/${chapterNumber || 'unknown'}`;
+}
+function pickLastInRange(values, min, max) {
+  for (let i = values.length - 1; i >= 0; i--) {
+    const v = values[i];
+    if (v > max) continue;
+    if (v >= min) return v;
+    break;
+  }
+  return null;
+}
 
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -163,22 +209,29 @@ async function captureChapter(tabId) {
     const totalH = endY - startY;
     if (totalH <= 0) return [];
 
-    // Phase 4: Chunked capture với overlap để tránh cắt ký tự tại ranh giới
+    // Phase 4: Chunked capture, ưu tiên cắt ở đáy đoạn <p> để tránh cắt ngang dòng
+    const paragraphBottoms = Array.isArray(info.paragraphBottoms) ? info.paragraphBottoms : [];
     let y = startY;
     let idx = 0;
     while (y < endY) {
-      setProgress(Math.round((idx * CHUNK_H / totalH) * 80));
+      const progressed = Math.max(0, y - startY);
+      setProgress(Math.round((progressed / totalH) * 80));
       setStatus(`Chụp vùng ${idx + 1}...`);
 
+      const targetEnd = Math.min(endY, y + CHUNK_H);
+      const minSnapY = y + Math.floor(CHUNK_H * MIN_CHUNK_RATIO);
+      const snappedEnd = paragraphBottoms.length ? pickLastInRange(paragraphBottoms, minSnapY, targetEnd) : null;
+      const endAt = (snappedEnd && snappedEnd > y) ? Math.min(endY, snappedEnd + SAFE_PADDING) : targetEnd;
+
       const captureY = (idx === 0) ? y : Math.max(startY, y - OVERLAP_H);
-      const captureH = Math.min(CHUNK_H + OVERLAP_H, endY - captureY);
+      const captureH = Math.max(1, endAt - captureY);
 
       const data = await captureWithRetry(tabId, {
         x: cropX, y: captureY, width: cropW, height: captureH, scale: 1,
       });
 
       shots.push(`data:image/jpeg;base64,${data}`);
-      y += CHUNK_H;
+      y = endAt;
       idx++;
     }
   } finally {
@@ -333,11 +386,14 @@ btnTest.addEventListener('click', async () => {
     }
 
     setStatus(`Đang lưu ${screenshots.length} ảnh...`);
-    const chapterName = tab.title.replace(/_.*$/, '').replace(/ [-—].*$/, '').replace(/[\\/:*?"<>|]/g, '_').trim();
+    const chapterName = sanitizeFilename(tab.title.replace(/_.*$/, '').replace(/ [-—].*$/, '').trim());
+    const slug = normalizeSlug(novelSlugInput.value);
+    const chapterNo = extractChapterNumber(chapterName);
+    const exportDir = buildExportDir(slug, chapterNo);
 
     for (let i = 0; i < screenshots.length; i++) {
       const url = screenshots[i];
-      const filename = `qidian_test/${chapterName}_${String(i + 1).padStart(2, '0')}.jpg`;
+      const filename = `${exportDir}/${chapterName}_${String(i + 1).padStart(2, '0')}.jpg`;
       await new Promise(resolve => {
         chrome.downloads.download({ url, filename, saveAs: false }, resolve);
       });
@@ -345,7 +401,7 @@ btnTest.addEventListener('click', async () => {
     }
 
     setProgress(100);
-    setStatus(`Đã lưu ${screenshots.length} ảnh vào thư mục Downloads/qidian_test/`);
+    setStatus(`Đã lưu ${screenshots.length} ảnh vào Downloads/${exportDir}/`);
   } catch (err) {
     setStatus('Lỗi: ' + err.message);
   } finally {
@@ -359,7 +415,10 @@ btnDownload.addEventListener('click', () => {
   if (!savedText) return;
   const blob = new Blob([savedText], { type: 'text/plain;charset=utf-8' });
   const url  = URL.createObjectURL(blob);
-  const name = savedTitle.replace(/[\\/:*?"<>|]/g, '_') + '.txt';
+  const safeTitle = sanitizeFilename(savedTitle);
+  const slug = normalizeSlug(novelSlugInput.value);
+  const chapterNo = extractChapterNumber(safeTitle);
+  const name = `${buildExportDir(slug, chapterNo)}/${safeTitle}.txt`;
   chrome.downloads.download({ url, filename: name, saveAs: false }, () => {
     setStatus(`Đã tải: ${name}`);
     URL.revokeObjectURL(url);

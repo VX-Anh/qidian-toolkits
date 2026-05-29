@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..agent.novel_loader import list_novels, load_novel
+from ..agent import vietphase_import
 from ..config import settings
 
 router = APIRouter(prefix="/api/novels", tags=["novels"])
@@ -11,6 +12,11 @@ router = APIRouter(prefix="/api/novels", tags=["novels"])
 
 @router.get("")
 def get_novels():
+    # Tự tạo rules/{slug}/novel.md cho mỗi folder slug có trong data/vietphase/
+    try:
+        vietphase_import.ensure_novels_from_folders(settings)
+    except Exception:
+        pass
     slugs = list_novels(settings.rules_dir)
     result = []
     for slug in slugs:

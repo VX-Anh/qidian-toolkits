@@ -13,9 +13,20 @@ class Settings(BaseSettings):
     input_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\input")
     output_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\output")
     ocr_images_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\ocr_images")
+    # Thư mục import sẵn: vietphase/{slug}/{chương}/(output.txt + ảnh .jpg)
+    vietphase_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\vietphase")
     rules_dir: Path = Path("rules")
 
     concurrency: int = 3
+
+    # ── OCR ──────────────────────────────────────────────────────────────
+    # "paddle" = PaddleOCR offline (mặc định), "openai" = gpt-4o-mini vision
+    ocr_default_engine: str = "paddle"
+    # PaddleOCR chạy trong venv riêng của project qidian-ocr (paddle + model đã cài sẵn)
+    paddle_python: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\qidian-ocr\.venv\Scripts\python.exe")
+    paddle_ocr_script: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\qidian-ocr\run_ocr.py")
+    paddle_ocr_cwd: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\qidian-ocr")
+    paddle_use_server: bool = True
 
 
 @lru_cache
