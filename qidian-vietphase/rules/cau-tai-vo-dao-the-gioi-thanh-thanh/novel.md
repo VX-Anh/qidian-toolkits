@@ -56,6 +56,7 @@ Tên riêng phải dịch đúng theo bảng thuật ngữ bên dưới.
 | 元靖首座 | Nguyên Tĩnh Thủ Tọa | Chức vị/nhân vật; giữ Hán Việt. |
 | 天演印记 | Thiên Diễn Ấn Ký | Ấn ký/vật thưởng; dịch nghĩa + Hán Việt. |
 | 天演石 | Thiên Diễn Thạch | Đá/đạo cụ gắn với Thiên Diễn; dịch nghĩa + Hán Việt. |
+| 司奇 | Ty Kỳ | Nhân vật; phiên âm Hán Việt. |
 ## Địa danh
 
 | Tiếng Trung | Tiếng Việt | Ghi chú |
