@@ -65,6 +65,7 @@ function App() {
   const [tab, setTab] = useStateA("chapters");
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
+  const [wikiEntities, setWikiEntities] = useStateA([]);
   const [novelMd, setNovelMd] = useStateA("");
 
   const [isRunning, setIsRunning] = useStateA(false);
@@ -83,6 +84,10 @@ function App() {
   const activeJobIdRef = useRefA(null);
   const openChapterRef = useRefA(null);
   useEffectA(() => { openChapterRef.current = openChapter; }, [openChapter]);
+  // Luôn phản ánh truyện đang hiển thị — để guard SSE không nạp dữ liệu job cũ
+  // vào truyện khác khi người dùng đổi truyện giữa lúc đang dịch.
+  const currentSlugRef = useRefA(null);
+  useEffectA(() => { currentSlugRef.current = currentSlug; }, [currentSlug]);
 
   // ── Computed ─────────────────────────────────────────────────────────
   const currentNovel = useMemoA(() => {
@@ -119,8 +124,9 @@ function App() {
   const tabCounts = useMemoA(() => ({
     chapters: chapters.length,
     glossary: Object.values(glossary).reduce((a, l) => a + l.length, 0),
+    wiki:     wikiEntities.length,
     output:   chapters.filter(c => c.status === "done").length,
-  }), [chapters, glossary]);
+  }), [chapters, glossary, wikiEntities]);
 
   // ── Data loading ─────────────────────────────────────────────────────
   async function loadChapters(slug) {
@@ -172,6 +178,13 @@ function App() {
     } catch { /* ignore */ }
   }
 
+  async function loadWiki(slug) {
+    try {
+      const data = await api.get(`/api/wiki/${slug}/entities`);
+      setWikiEntities(Array.isArray(data) ? data : []);
+    } catch { setWikiEntities([]); }
+  }
+
   // Load novels on mount
   useEffectA(() => {
     api.get("/api/novels")
@@ -198,19 +211,21 @@ function App() {
     loadChapters(currentSlug);
     loadGlossary(currentSlug);
     loadNovelMd(currentSlug);
+    loadWiki(currentSlug);
   }, [currentSlug]);
 
   // ── SSE / Translation ─────────────────────────────────────────────────
   function startTranslation(filenames) {
     if (!currentSlug) { setToast({ msg: "Chọn truyện trước!", type: "error" }); return; }
     if (isRunning) return;
-    const body = { novel_slug: currentSlug };
+    const jobSlug = currentSlug;          // truyện gắn với job này
+    const body = { novel_slug: jobSlug };
     if (filenames && filenames.length) body.chapter_filenames = filenames;
     api.post("/api/translate/start", body)
       .then(({ job_id }) => {
         activeJobIdRef.current = job_id;
         setIsRunning(true);
-        listenToJob(job_id);
+        listenToJob(job_id, jobSlug);
         setToast({ msg: "Bắt đầu dịch…", type: "info" });
       })
       .catch(err => setToast({ msg: `Không thể bắt đầu dịch: ${err.message}`, type: "error" }));
@@ -225,7 +240,7 @@ function App() {
     if (currentSlug) loadChapters(currentSlug);
   }
 
-  function listenToJob(jobId) {
+  function listenToJob(jobId, jobSlug) {
     if (esRef.current) esRef.current.close();
     const es = new EventSource(`/api/translate/stream/${jobId}`);
     esRef.current = es;
@@ -256,15 +271,19 @@ function App() {
           setChapters(prev => prev.map(c =>
             c.filename === file ? { ...c, status: "done", progress: 100 } : c
           ));
+        } else if (type === "wiki_ingest" && agent === "orchestrator") {
+          setToast({ msg: `Đang xây Story-Wiki (${event.count} chương)…`, type: "info" });
+        } else if (type === "wiki_done" && agent === "orchestrator") {
+          if (currentSlugRef.current === jobSlug) loadWiki(jobSlug);
         } else if (type === "done" && agent === "orchestrator") {
           setIsRunning(false);
           setToast({ msg: "Dịch xong!", type: "success" });
           if (esRef.current) { esRef.current.close(); esRef.current = null; }
-          if (currentSlug) { loadChapters(currentSlug); loadGlossary(currentSlug); }
+          if (currentSlugRef.current === jobSlug) { loadChapters(jobSlug); loadGlossary(jobSlug); loadWiki(jobSlug); }
         } else if (type === "cancelled") {
           setIsRunning(false);
           if (esRef.current) { esRef.current.close(); esRef.current = null; }
-          if (currentSlug) loadChapters(currentSlug);
+          if (currentSlugRef.current === jobSlug) loadChapters(jobSlug);
         } else if (type === "error" && event.file) {
           setChapters(prev => prev.map(c =>
             c.filename === event.file
@@ -276,7 +295,7 @@ function App() {
           setToast({ msg: `Lỗi: ${event.msg || event.error || "không xác định"}`, type: "error" });
         } else if (type === "review_summary") {
           // Refresh review badges/issues from DB after the batch is reviewed
-          if (currentSlug) loadChapters(currentSlug);
+          if (currentSlugRef.current === jobSlug) loadChapters(jobSlug);
         }
       } catch { /* ignore malformed */ }
     };
@@ -475,6 +494,7 @@ function App() {
         if (window._lastG && Date.now() - window._lastG < 700) {
           if (e.key === "c") { setTab("chapters"); window._lastG = 0; }
           if (e.key === "t") { setTab("glossary"); window._lastG = 0; }
+          if (e.key === "w") { setTab("wiki");     window._lastG = 0; }
           if (e.key === "b") { setTab("output");   window._lastG = 0; }
           if (e.key === "s") { setTab("settings"); window._lastG = 0; }
         }
@@ -514,6 +534,7 @@ function App() {
     if (item.id === "toggle-activity") setTweak("showActivity", !tweaks.showActivity);
     if (item.id === "go-chapters")     setTab("chapters");
     if (item.id === "go-glossary")     setTab("glossary");
+    if (item.id === "go-wiki")         setTab("wiki");
     if (item.id === "go-output")       setTab("output");
     if (item.id === "go-settings")     setTab("settings");
     if (item.id.startsWith("novel:"))  setCurrentSlug(item.id.slice(6));
@@ -548,6 +569,7 @@ function App() {
             setCurrentSlug(slug);
             setChapters([]);
             setGlossary({ characters: [], places: [], realms: [], skills: [] });
+            setWikiEntities([]);
             setChecked({});
             setStreamingTexts({});
             setOpenChapter(null);
@@ -605,6 +627,10 @@ function App() {
               onAdd={onAddGloss}
               onExtract={() => setToast({ msg: "Đang trích xuất thuật ngữ từ AI…", type: "info" })}
             />
+          )}
+
+          {tab === "wiki" && (
+            <WikiScreen entities={wikiEntities} novelSlug={currentSlug} />
           )}
 
           {tab === "output" && (

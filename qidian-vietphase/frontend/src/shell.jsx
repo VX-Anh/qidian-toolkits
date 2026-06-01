@@ -71,10 +71,11 @@ function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk }
 
 // ── Top bar (breadcrumb + tabs + search + actions) ───────────────────────
 const TAB_DEFS = [
-  { id: "chapters", label: "Chương",    icon: "list" },
-  { id: "glossary", label: "Thuật ngữ", icon: "hash" },
-  { id: "output",   label: "Bản dịch",  icon: "bookOpen" },
-  { id: "settings", label: "Cài đặt",   icon: "settings" },
+  { id: "chapters", label: "Chương",     icon: "list" },
+  { id: "glossary", label: "Thuật ngữ",  icon: "hash" },
+  { id: "wiki",     label: "Story-Wiki", icon: "book" },
+  { id: "output",   label: "Bản dịch",   icon: "bookOpen" },
+  { id: "settings", label: "Cài đặt",    icon: "settings" },
 ];
 
 function TopBar({

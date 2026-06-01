@@ -26,6 +26,7 @@ function CommandPalette({ open, onClose, novels, chapters, glossary, onAction })
       { id: "toggle-activity", group: "Hành động", icon: "activity", label: "Bật/tắt bảng hoạt động agent" },
       { id: "go-chapters",     group: "Điều hướng", icon: "list",    label: "Đi đến Chương",        sub: "G C" },
       { id: "go-glossary",     group: "Điều hướng", icon: "hash",    label: "Đi đến Thuật ngữ",     sub: "G T" },
+      { id: "go-wiki",         group: "Điều hướng", icon: "book",    label: "Đi đến Story-Wiki",    sub: "G W" },
       { id: "go-output",       group: "Điều hướng", icon: "bookOpen",label: "Đi đến Bản dịch",      sub: "G B" },
       { id: "go-settings",     group: "Điều hướng", icon: "settings",label: "Đi đến Cài đặt",       sub: "G S" },
     ].filter(a => !Q || a.label.toLowerCase().includes(Q));

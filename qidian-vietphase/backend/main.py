@@ -15,7 +15,7 @@ class NoCacheStaticFiles(StaticFiles):
         response.headers["Pragma"] = "no-cache"
         return response
 
-from .routers import chapters, novels, ocr, translate
+from .routers import chapters, novels, ocr, translate, wiki
 
 app = FastAPI(title="VietPhase", version="0.1.0", debug=True)
 
@@ -30,6 +30,7 @@ app.include_router(novels.router)
 app.include_router(chapters.router)
 app.include_router(translate.router)
 app.include_router(ocr.router)
+app.include_router(wiki.router)
 
 FRONTEND = Path(__file__).parent.parent / "frontend"
 

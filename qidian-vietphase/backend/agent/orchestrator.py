@@ -12,6 +12,7 @@ from .rate_limiter import RateLimiter
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
 from .translator import TranslatorAgent
+from .wiki_agent import WikiAgent
 
 
 def parse_chapter_filename(filename: str) -> tuple[int, str]:
@@ -87,7 +88,14 @@ class Orchestrator:
             async for event in extractor.run():
                 await self.event_queue.put(event.to_dict())
 
-            # Review từng chương được dịch thành công trong batch này
+            # Extractor vừa có thể append term mới vào novel.md → nạp lại profile
+            # để WikiAgent/Reviewer thấy glossary mới nhất.
+            try:
+                profile = load_novel(self.rules_dir, self.novel_slug)
+            except Exception:
+                pass
+
+            # Các chương dịch thành công trong batch này (dùng chung cho wiki + review)
             current_filenames = {path.name for path in files}
             done_chapters = [
                 c for c in self.state.get_chapters(self.novel_slug)
@@ -95,6 +103,34 @@ class Orchestrator:
                 and c.get("translated_path")
                 and c["filename"] in current_filenames
             ]
+
+            # Story-wiki ingest: trích entity/quan hệ/sự kiện từ mỗi chương trong batch.
+            # Đọc nguồn Trung (còn giữ Hán tự) — chương OCR không có .txt nguồn sẽ bỏ qua.
+            wiki_targets = [
+                c for c in done_chapters
+                if (self.input_dir / c["filename"]).exists()
+            ]
+            if wiki_targets:
+                await self._emit("orchestrator", "wiki_ingest", count=len(wiki_targets))
+                for chapter in wiki_targets:
+                    try:
+                        wiki = WikiAgent(
+                            filename=chapter["filename"],
+                            novel_slug=self.novel_slug,
+                            chapter_num=chapter["chapter_num"],
+                            source_content=(self.input_dir / chapter["filename"]).read_text(encoding="utf-8"),
+                            profile=profile,
+                            state=self.state,
+                            client=self.client,
+                        )
+                        async for event in wiki.run():
+                            await self.event_queue.put(event.to_dict())
+                    except Exception as exc:
+                        await self._emit("wiki", "error",
+                                         file=chapter["filename"], error=str(exc))
+                await self._emit("orchestrator", "wiki_done", novel=self.novel_slug)
+
+            # Review từng chương được dịch thành công trong batch này
             if done_chapters:
                 await self._emit("orchestrator", "reviewing", count=len(done_chapters))
                 for chapter in done_chapters:
