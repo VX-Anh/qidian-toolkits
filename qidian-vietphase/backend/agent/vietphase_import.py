@@ -33,8 +33,28 @@ def list_images(chapter_dir: Path) -> list[Path]:
     )
 
 
+def _pick_raw_text(chapter_dir: Path) -> Path | None:
+    """File .txt nguồn từ extension (không phải output.txt), khớp 第\\d+章.
+
+    Đây là bản copy text trực tiếp từ Qidian — chính xác hơn OCR. Ưu tiên bản tên
+    sạch (không có hậu tố _N như '..._1.txt') khi có nhiều bản.
+    """
+    cands = [
+        p for p in chapter_dir.glob("*.txt")
+        if p.name != "output.txt" and re.search(r"第\d+章", p.name)
+    ]
+    if not cands:
+        return None
+    clean = [p for p in cands if not re.search(r"_\d+\.txt$", p.name)]
+    return sorted(clean or cands, key=lambda p: p.name)[0]
+
+
 def scan(state, settings, novel_slug: str | None = None) -> list[str]:
-    """Quét vietphase_dir, đăng ký các chương ảnh. Trả về danh sách filename đã import."""
+    """Quét vietphase_dir, đăng ký chương (ảnh OCR hoặc text từ extension).
+
+    Mỗi chương được copy nguồn vào input_dir để dịch — ưu tiên file text extension
+    (第NNN章....txt), fallback output.txt (OCR). Trả về danh sách filename đã import.
+    """
     base: Path = settings.vietphase_dir
     if not base.exists():
         return []
@@ -53,20 +73,27 @@ def scan(state, settings, novel_slug: str | None = None) -> list[str]:
             if not chdir.is_dir():
                 continue
             images = list_images(chdir)
-            if not images:
+            raw_txt = _pick_raw_text(chdir)
+            out_txt = chdir / "output.txt"
+            # Bỏ qua thư mục không có nguồn nào (ảnh / text extension / OCR)
+            if not images and raw_txt is None and not out_txt.exists():
                 continue
 
-            filename = derive_filename(images[0].name, chdir.name)
+            # Tên chương chuẩn: ưu tiên text extension → ảnh → tên thư mục
+            base_name = raw_txt.name if raw_txt else (images[0].name if images else None)
+            filename = derive_filename(base_name or chdir.name, chdir.name)
             num, zh_title = parse_chapter_filename(filename)
 
-            # Copy output.txt → input_dir/<filename> nếu chưa có nguồn
-            out_txt = chdir / "output.txt"
+            # Nguồn dịch: ưu tiên text extension (copy trực tiếp), fallback output.txt (OCR).
+            # Copy vào input_dir nếu chưa có — không ghi đè bản đã sửa tay.
+            src = raw_txt if raw_txt else (out_txt if out_txt.exists() else None)
             dest = settings.input_dir / filename
-            if out_txt.exists() and not dest.exists():
+            if src and not dest.exists():
                 settings.input_dir.mkdir(parents=True, exist_ok=True)
-                dest.write_text(out_txt.read_text(encoding="utf-8"), encoding="utf-8")
+                dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
 
-            # Đăng ký / cập nhật chương với ocr_job_id = tên thư mục chương
+            # Chương ảnh → ocr_job_id = tên thư mục; chương text-only → None (không có bước OCR)
+            ocr_job_id = chdir.name if images else None
             conn.execute(
                 """INSERT INTO chapters(filename, novel_slug, chapter_num, zh_title, ocr_job_id)
                    VALUES(?,?,?,?,?)
@@ -76,7 +103,7 @@ def scan(state, settings, novel_slug: str | None = None) -> list[str]:
                        chapter_num = excluded.chapter_num,
                        zh_title    = excluded.zh_title,
                        ocr_job_id  = COALESCE(excluded.ocr_job_id, chapters.ocr_job_id)""",
-                [filename, slug, num, zh_title, chdir.name],
+                [filename, slug, num, zh_title, ocr_job_id],
             )
             imported.append(filename)
 

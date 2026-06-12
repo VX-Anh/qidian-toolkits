@@ -31,6 +31,7 @@ class SharedState:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._init_db()
+        self._recover_stale_in_progress()
 
     def _init_db(self):
         self._conn.executescript("""
@@ -103,6 +104,23 @@ class SharedState:
             self._conn.commit()
         except Exception:
             pass
+
+    def _recover_stale_in_progress(self):
+        """Khởi động lại server → không asyncio task nào sống sót, nên mọi chương
+        còn 'in_progress' là job dang dở (cancel/crash/SSE ngắt). Gỡ kẹt:
+        - đã có translated_path (đã dịch xong trước đó) → 'done'
+        - chưa có → 'pending' để có thể dịch lại.
+        """
+        with self._tlock:
+            self._conn.execute(
+                "UPDATE chapters SET status='done', updated_at=datetime('now') "
+                "WHERE status='in_progress' AND translated_path IS NOT NULL"
+            )
+            self._conn.execute(
+                "UPDATE chapters SET status='pending', updated_at=datetime('now') "
+                "WHERE status='in_progress'"
+            )
+            self._conn.commit()
 
     # ── Chapters ──────────────────────────────────────────────────────────────
 

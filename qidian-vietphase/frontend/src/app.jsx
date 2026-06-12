@@ -50,6 +50,25 @@ const api = {
   },
 };
 
+// ── Hash routing ──────────────────────────────────────────────────────────────
+// URL có dạng  #/{novel_slug}/{tab}  để vào thẳng từng trang.
+const VALID_TABS = ["chapters", "glossary", "wiki", "output", "settings"];
+
+function parseHash() {
+  const parts = (location.hash || "").replace(/^#\/?/, "").split("/");
+  return {
+    slug: parts[0] ? decodeURIComponent(parts[0]) : null,
+    tab: parts[1] || null,
+    chapter: parts[2] ? decodeURIComponent(parts[2]) : null,  // số chương
+  };
+}
+
+function buildHash(slug, tab, chapter) {
+  let h = `#/${encodeURIComponent(slug)}/${tab}`;
+  if (chapter != null && chapter !== "") h += `/${encodeURIComponent(chapter)}`;
+  return h;
+}
+
 function App() {
   // ── Tweaks ───────────────────────────────────────────────────────────
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
@@ -88,6 +107,13 @@ function App() {
   // vào truyện khác khi người dùng đổi truyện giữa lúc đang dịch.
   const currentSlugRef = useRefA(null);
   useEffectA(() => { currentSlugRef.current = currentSlug; }, [currentSlug]);
+  // Bản chương mới nhất cho hash listener đọc mà không cần phụ thuộc effect.
+  const chaptersRef = useRefA([]);
+  useEffectA(() => { chaptersRef.current = chapters; }, [chapters]);
+  // Số chương cần mở từ URL khi danh sách chương chưa nạp xong.
+  const pendingChapterRef = useRefA(null);
+  // Chương mở ở lần đồng bộ URL trước — để phân biệt "vừa mở" (push) vs còn lại (replace).
+  const prevOpenRef = useRefA(null);
 
   // ── Computed ─────────────────────────────────────────────────────────
   const currentNovel = useMemoA(() => {
@@ -200,10 +226,62 @@ function App() {
           cover_glyph: (n.zh_name || "?")[0],
         }));
         setNovels(mapped);
-        if (mapped.length > 0) setCurrentSlug(mapped[0].slug);
+        if (mapped.length > 0) {
+          // Vào thẳng truyện/trang/chương theo URL nếu hợp lệ, nếu không lấy truyện đầu.
+          const { slug: hashSlug, tab: hashTab, chapter: hashChapter } = parseHash();
+          const slug = mapped.some(n => n.slug === hashSlug) ? hashSlug : mapped[0].slug;
+          setCurrentSlug(slug);
+          if (hashTab && VALID_TABS.includes(hashTab)) setTab(hashTab);
+          if (hashChapter) pendingChapterRef.current = hashChapter;  // mở khi chương nạp xong
+        }
       })
       .catch(err => setToast({ msg: `Lỗi tải danh sách truyện: ${err.message}`, type: "error" }));
   }, []);
+
+  // ── Đồng bộ state → URL và URL → state ───────────────────────────────
+  // state → hash: mỗi khi đổi truyện / tab / chương đang mở, cập nhật URL.
+  //  • Mở chương  → pushState (tạo entry để bấm Back đóng được chương).
+  //  • Còn lại    → replaceState (đổi tab/truyện/prev-next/đóng chương: không tạo rác history).
+  useEffectA(() => {
+    if (!currentSlug) return;
+    const chNum = openChapter ? openChapter.chapter_num : null;
+    const want = buildHash(currentSlug, tab, chNum);
+    if (location.hash === want) { prevOpenRef.current = openChapter; return; }
+
+    const justOpened = !prevOpenRef.current && openChapter;
+    if (justOpened) history.pushState(null, "", want);
+    else            history.replaceState(null, "", want);
+    prevOpenRef.current = openChapter;
+  }, [currentSlug, tab, openChapter]);
+
+  // Mở chương đang chờ từ URL khi danh sách chương vừa nạp xong.
+  useEffectA(() => {
+    if (pendingChapterRef.current == null) return;
+    const want = String(pendingChapterRef.current);
+    const ch = chapters.find(c => String(c.chapter_num) === want);
+    if (ch) { setOpenChapter(ch); pendingChapterRef.current = null; }
+  }, [chapters]);
+
+  // hash → state: back/forward hoặc sửa URL thủ công.
+  useEffectA(() => {
+    const onHash = () => {
+      const { slug, tab: t, chapter } = parseHash();
+      if (slug && slug !== currentSlugRef.current && novels.some(n => n.slug === slug)) {
+        selectNovel(slug);
+      }
+      if (t && VALID_TABS.includes(t)) setTab(t);
+      // Mở/đóng chương theo URL.
+      if (chapter) {
+        const ch = chaptersRef.current.find(c => String(c.chapter_num) === String(chapter));
+        if (ch) setOpenChapter(ch);
+        else pendingChapterRef.current = chapter;  // đổi truyện xong sẽ mở
+      } else if (openChapterRef.current) {
+        setOpenChapter(null);
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, [novels]);
 
   // Load data when slug changes
   useEffectA(() => {
@@ -215,12 +293,14 @@ function App() {
   }, [currentSlug]);
 
   // ── SSE / Translation ─────────────────────────────────────────────────
-  function startTranslation(filenames) {
+  function startTranslation(filenames, { force = false, runWiki = true } = {}) {
     if (!currentSlug) { setToast({ msg: "Chọn truyện trước!", type: "error" }); return; }
     if (isRunning) return;
     const jobSlug = currentSlug;          // truyện gắn với job này
     const body = { novel_slug: jobSlug };
     if (filenames && filenames.length) body.chapter_filenames = filenames;
+    if (force) body.force = true;         // dịch lại kể cả chương đã xong
+    if (!runWiki) body.run_wiki = false;  // chỉ dịch, không tự đưa vào Wiki
     api.post("/api/translate/start", body)
       .then(({ job_id }) => {
         activeJobIdRef.current = job_id;
@@ -305,6 +385,45 @@ function App() {
         setIsRunning(false);
         esRef.current = null;
       }
+    };
+  }
+
+  // ── Đưa chương vào Story-Wiki (bước riêng, tách khỏi dịch) ────────────
+  function ingestWiki(filenames) {
+    if (!currentSlug) { setToast({ msg: "Chọn truyện trước!", type: "error" }); return; }
+    if (isRunning) { setToast({ msg: "Đang có tác vụ chạy, đợi xong đã.", type: "error" }); return; }
+    if (!filenames || !filenames.length) return;
+    const jobSlug = currentSlug;
+    api.post("/api/translate/wiki", { novel_slug: jobSlug, chapter_filenames: filenames })
+      .then(({ job_id }) => {
+        activeJobIdRef.current = job_id;
+        setIsRunning(true);
+        listenToWikiJob(job_id, jobSlug);
+        setToast({ msg: "Đang đưa vào Story-Wiki…", type: "info" });
+      })
+      .catch(err => setToast({ msg: `Không thể đưa vào Wiki: ${err.message}`, type: "error" }));
+  }
+
+  function listenToWikiJob(jobId, jobSlug) {
+    if (esRef.current) esRef.current.close();
+    const es = new EventSource(`/api/translate/stream/${jobId}`);
+    esRef.current = es;
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        const { agent, type } = event;
+        if (type === "wiki_done" && agent === "orchestrator") {
+          setIsRunning(false);
+          if (esRef.current) { esRef.current.close(); esRef.current = null; }
+          if (currentSlugRef.current === jobSlug) loadWiki(jobSlug);
+          setToast({ msg: "Đã cập nhật Story-Wiki!", type: "success" });
+        } else if (type === "error") {
+          setToast({ msg: `Lỗi Wiki: ${event.error || event.msg || "không xác định"}`, type: "error" });
+        }
+      } catch { /* ignore malformed */ }
+    };
+    es.onerror = () => {
+      if (esRef.current === es) { setIsRunning(false); esRef.current = null; }
     };
   }
 
@@ -443,6 +562,48 @@ function App() {
     }
   }
 
+  // ── Glossary edit / delete ───────────────────────────────────────────
+  const glossRow = (it) => `| ${it.zh} | ${it.vi} | ${it.notes || ""} |`;
+
+  async function onEditGloss(cat, oldItem, newItem) {
+    if (!currentSlug) return;
+    if (!newItem.zh || !newItem.vi) {
+      setToast({ msg: "Cần nhập cả tiếng Trung và tiếng Việt", type: "error" });
+      return;
+    }
+    try {
+      const rawData = await api.get(`/api/novels/${currentSlug}/raw`);
+      const oldRow = glossRow(oldItem).trim();
+      const newRow = glossRow(newItem);
+      const lines = rawData.content.split("\n");
+      const idx = lines.findIndex(l => l.trim() === oldRow);
+      if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
+      lines[idx] = newRow;
+      await api.put(`/api/novels/${currentSlug}/raw`, { content: lines.join("\n") });
+      await loadGlossary(currentSlug);
+      setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
+    } catch (err) {
+      setToast({ msg: `Lỗi sửa thuật ngữ: ${err.message}`, type: "error" });
+    }
+  }
+
+  async function onDeleteGloss(cat, item) {
+    if (!currentSlug) return;
+    try {
+      const rawData = await api.get(`/api/novels/${currentSlug}/raw`);
+      const oldRow = glossRow(item).trim();
+      const lines = rawData.content.split("\n");
+      const idx = lines.findIndex(l => l.trim() === oldRow);
+      if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
+      lines.splice(idx, 1);
+      await api.put(`/api/novels/${currentSlug}/raw`, { content: lines.join("\n") });
+      await loadGlossary(currentSlug);
+      setToast({ msg: "Đã xoá thuật ngữ", type: "success" });
+    } catch (err) {
+      setToast({ msg: `Lỗi xoá thuật ngữ: ${err.message}`, type: "error" });
+    }
+  }
+
   // ── Novel.md save ────────────────────────────────────────────────────
   async function saveNovelMd() {
     if (!currentSlug) return;
@@ -505,6 +666,18 @@ function App() {
   }, []);
 
   // ── Handlers ─────────────────────────────────────────────────────────
+  function selectNovel(slug) {
+    if (slug === currentSlugRef.current) return;
+    setCurrentSlug(slug);
+    setChapters([]);
+    setGlossary({ characters: [], places: [], realms: [], skills: [] });
+    setWikiEntities([]);
+    setChecked({});
+    setStreamingTexts({});
+    setOpenChapter(null);
+    pendingChapterRef.current = null;
+  }
+
   const toggleCheck = (fn) => setChecked(c => ({ ...c, [fn]: !c[fn] }));
   const selectAll = (visible) => {
     const next = { ...checked };
@@ -537,7 +710,7 @@ function App() {
     if (item.id === "go-wiki")         setTab("wiki");
     if (item.id === "go-output")       setTab("output");
     if (item.id === "go-settings")     setTab("settings");
-    if (item.id.startsWith("novel:"))  setCurrentSlug(item.id.slice(6));
+    if (item.id.startsWith("novel:"))  selectNovel(item.id.slice(6));
     if (item.id.startsWith("chapter:")) {
       const ch = chapters.find(c => c.filename === item.id.slice(8));
       if (ch) setOpenChapter(ch);
@@ -548,7 +721,11 @@ function App() {
 
   // ── Live streamed text for the open chapter ─────────────────────────
   const liveTextForOpen = openChapter ? (streamingTexts[openChapter.filename] || "") : "";
-  const isStreamingOpen = openChapter ? openChapter.status === "in_progress" : false;
+  // Chỉ coi là "đang dịch" khi thực sự có job đang chạy. Chương kẹt 'in_progress'
+  // mà không có job (server từng bị gián đoạn) sẽ không bị khoá nút Dịch lại.
+  const isStreamingOpen = openChapter
+    ? openChapter.status === "in_progress" && isRunning
+    : false;
 
   // ── Novels with updated done/total ──────────────────────────────────
   const novelsWithStats = useMemoA(() =>
@@ -565,15 +742,7 @@ function App() {
         <LeftRail
           novels={novelsWithStats}
           currentSlug={currentSlug}
-          onSelect={(slug) => {
-            setCurrentSlug(slug);
-            setChapters([]);
-            setGlossary({ characters: [], places: [], realms: [], skills: [] });
-            setWikiEntities([]);
-            setChecked({});
-            setStreamingTexts({});
-            setOpenChapter(null);
-          }}
+          onSelect={selectNovel}
           onNew={() => setNewOpen(true)}
           onOpenCmdk={() => setCmdkOpen(true)}
           serverOk={true}
@@ -625,6 +794,8 @@ function App() {
             <GlossaryScreen
               glossary={glossary}
               onAdd={onAddGloss}
+              onEdit={onEditGloss}
+              onDelete={onDeleteGloss}
               onExtract={() => setToast({ msg: "Đang trích xuất thuật ngữ từ AI…", type: "info" })}
             />
           )}
@@ -665,9 +836,10 @@ function App() {
           onPrev={() => navChapter(-1)}
           onNext={() => navChapter(1)}
           onRetranslate={() => {
-            startTranslation([openChapter.filename]);
+            startTranslation([openChapter.filename], { force: true, runWiki: false });
             setToast({ msg: "Bắt đầu dịch lại chương này…", type: "info" });
           }}
+          onIngestWiki={() => ingestWiki([openChapter.filename])}
         />
       )}
 

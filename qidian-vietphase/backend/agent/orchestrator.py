@@ -34,6 +34,8 @@ class Orchestrator:
         event_queue: EventQueue,
         client: AsyncOpenAI,
         chapter_filenames: list[str] | None = None,
+        force: bool = False,
+        run_wiki: bool = True,
     ):
         self.novel_slug = novel_slug
         self.input_dir = input_dir
@@ -43,6 +45,8 @@ class Orchestrator:
         self.event_queue = event_queue
         self.client = client
         self.chapter_filenames = chapter_filenames  # None = dịch tất cả
+        self.force = force  # True = dịch lại kể cả chương đã DONE
+        self.run_wiki = run_wiki  # False = chỉ dịch, bỏ bước đưa vào Story-Wiki
         self.rate_limiter = RateLimiter(rpm=500, tpm=150_000)
 
     async def run(self):
@@ -109,7 +113,7 @@ class Orchestrator:
             wiki_targets = [
                 c for c in done_chapters
                 if (self.input_dir / c["filename"]).exists()
-            ]
+            ] if self.run_wiki else []
             if wiki_targets:
                 await self._emit("orchestrator", "wiki_ingest", count=len(wiki_targets))
                 for chapter in wiki_targets:
@@ -160,7 +164,11 @@ class Orchestrator:
         async with sem:
             filename = path.name
             chapter_info = self.state.get_chapter(filename)
-            if chapter_info and chapter_info["status"] == ChapterStatus.DONE:
+            if (
+                not self.force
+                and chapter_info
+                and chapter_info["status"] == ChapterStatus.DONE
+            ):
                 await self._emit("translator", "skip", file=filename, reason="already done")
                 return
 

@@ -1,6 +1,6 @@
 // glossary.jsx — Thuật ngữ tab
 
-const { useState: useStateG, useMemo: useMemoG } = React;
+const { useState: useStateG, useMemo: useMemoG, useEffect: useEffectG } = React;
 
 const GLOSS_CATS = [
   { id: "characters", label: "Nhân vật",  icon: "user"  },
@@ -9,7 +9,7 @@ const GLOSS_CATS = [
   { id: "skills",     label: "Pháp thuật / Kỹ năng", icon: "zap" },
 ];
 
-function GlossaryScreen({ glossary, onAdd, onExtract, isExtracting }) {
+function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtracting }) {
   const [cat, setCat] = useStateG("characters");
   const [q, setQ] = useStateG("");
   const [showAdd, setShowAdd] = useStateG(false);
@@ -18,6 +18,26 @@ function GlossaryScreen({ glossary, onAdd, onExtract, isExtracting }) {
   const [zh, setZh] = useStateG("");
   const [vi, setVi] = useStateG("");
   const [notes, setNotes] = useStateG("");
+
+  // inline edit state — keyed by the original item so it survives re-sorts
+  const [editing, setEditing] = useStateG(null); // { zh, vi, notes } original
+  const [ez, setEz] = useStateG("");
+  const [ev, setEv] = useStateG("");
+  const [en, setEn] = useStateG("");
+
+  // reset edit row when switching category
+  useEffectG(() => { setEditing(null); }, [cat]);
+
+  function startEdit(it) {
+    setEditing(it);
+    setEz(it.zh || ""); setEv(it.vi || ""); setEn(it.notes || "");
+  }
+  function saveEdit() {
+    onEdit(cat, editing, { zh: ez.trim(), vi: ev.trim(), notes: en.trim() });
+    setEditing(null);
+  }
+  const isEditing = (it) =>
+    editing && editing.zh === it.zh && editing.vi === it.vi && editing.notes === it.notes;
 
   const items = useMemoG(() => {
     const list = glossary[cat] || [];
@@ -116,28 +136,59 @@ function GlossaryScreen({ glossary, onAdd, onExtract, isExtracting }) {
                 <th style={{ width: 160 }}>Tiếng Trung</th>
                 <th style={{ width: 240 }}>Tiếng Việt</th>
                 <th>Ghi chú</th>
-                <th style={{ width: 90 }}>Dùng</th>
-                <th style={{ width: 50 }}></th>
+                <th style={{ width: 84 }}></th>
               </tr>
             </thead>
             <tbody>
               {items.map((it, i) => (
-                <tr key={i}>
-                  <td className="zh">{it.zh}</td>
-                  <td className="vi">{it.vi}</td>
-                  <td className="notes">{it.notes}</td>
-                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-4)" }}>
-                    {Math.floor(Math.random() * 80) + 1} chương
-                  </td>
-                  <td>
-                    <button className="icon-btn" title="Sửa">
-                      <Icon name="edit" size={13} />
-                    </button>
-                  </td>
-                </tr>
+                isEditing(it) ? (
+                  <tr key={i} className="gloss-editing">
+                    <td>
+                      <input className="input-field" value={ez}
+                        onChange={e => setEz(e.target.value)} style={{ width: "100%" }} />
+                    </td>
+                    <td>
+                      <input className="input-field" value={ev}
+                        onChange={e => setEv(e.target.value)} style={{ width: "100%" }} />
+                    </td>
+                    <td>
+                      <input className="input-field" value={en}
+                        onChange={e => setEn(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter" && ez && ev) saveEdit(); if (e.key === "Escape") setEditing(null); }}
+                        style={{ width: "100%" }} />
+                    </td>
+                    <td>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button className="icon-btn" title="Lưu" disabled={!ez || !ev} onClick={saveEdit}>
+                          <Icon name="check" size={13} />
+                        </button>
+                        <button className="icon-btn" title="Huỷ" onClick={() => setEditing(null)}>
+                          <Icon name="cross" size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  <tr key={i}>
+                    <td className="zh">{it.zh}</td>
+                    <td className="vi">{it.vi}</td>
+                    <td className="notes">{it.notes}</td>
+                    <td>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button className="icon-btn" title="Sửa" onClick={() => startEdit(it)}>
+                          <Icon name="edit" size={13} />
+                        </button>
+                        <button className="icon-btn" title="Xoá"
+                          onClick={() => { if (confirm(`Xoá thuật ngữ "${it.zh} → ${it.vi}"?`)) onDelete(cat, it); }}>
+                          <Icon name="cancel" size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
               ))}
               {items.length === 0 && (
-                <tr><td colSpan={5} style={{ textAlign: "center", padding: 32, color: "var(--fg-4)" }}>
+                <tr><td colSpan={4} style={{ textAlign: "center", padding: 32, color: "var(--fg-4)" }}>
                   Không tìm thấy thuật ngữ.
                 </td></tr>
               )}

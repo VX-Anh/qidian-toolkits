@@ -9,7 +9,7 @@ const { useState: useStateT, useEffect: useEffectT, useMemo: useMemoT, useRef: u
 function TranslationView({
   chapter, novel, novelSlug, glossary,
   liveText, isStreaming,
-  onClose, onNext, onPrev, onRetranslate,
+  onClose, onNext, onPrev, onRetranslate, onIngestWiki,
 }) {
   const isImage = !!chapter?.ocr_job_id;
 
@@ -279,6 +279,10 @@ function TranslationView({
           </button>
           <button className="btn primary sm" onClick={onRetranslate} disabled={isStreaming}>
             <Icon name="play" size={12} /> {isStreaming ? "Đang dịch…" : "Dịch lại"}
+          </button>
+          <button className="btn ghost sm" onClick={onIngestWiki} disabled={isStreaming || isImage}
+            title={isImage ? "Chương ảnh không có nguồn để trích Wiki" : "Trích thực thể/quan hệ vào Story-Wiki"}>
+            <Icon name="layers" size={12} /> Đưa vào Wiki
           </button>
         </div>
       </div>

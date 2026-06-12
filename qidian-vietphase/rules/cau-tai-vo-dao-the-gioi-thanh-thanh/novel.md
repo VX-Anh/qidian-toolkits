@@ -33,7 +33,6 @@ Tên riêng phải dịch đúng theo bảng thuật ngữ bên dưới.
 | 四级道兵 | Tứ Cấp Đạo Binh | Cấp bậc đạo binh. |
 | 元神榜 | Nguyên Thần Bảng | Danh bảng nguyên thần. |
 | 万象敛静雅 | Vạn Tượng Liễm Tĩnh Nhã | Tên người. |
-| 玄光 | Huyền Quang | Tên riêng/danh xưng. |
 | 传战力 | truyền chiến lực | Từ thông thường, không phải danh từ riêng. |
 | 邱露 | Khâu Lộ | Nhân vật. |
 | 万象图 | Vạn Tượng Đồ | Pháp bảo/bản đồ. |
@@ -56,7 +55,25 @@ Tên riêng phải dịch đúng theo bảng thuật ngữ bên dưới.
 | 元靖首座 | Nguyên Tĩnh Thủ Tọa | Chức vị/nhân vật; giữ Hán Việt. |
 | 天演印记 | Thiên Diễn Ấn Ký | Ấn ký/vật thưởng; dịch nghĩa + Hán Việt. |
 | 天演石 | Thiên Diễn Thạch | Đá/đạo cụ gắn với Thiên Diễn; dịch nghĩa + Hán Việt. |
-| 司奇 | Ty Kỳ | Nhân vật; phiên âm Hán Việt. |
+| 司奇 | Tư Kỳ | Nhân vật; phiên âm Hán Việt. |
+| 玄光 | Huyền Quang | Có vẻ là tên/thuật ngữ riêng trong ngữ cảnh, nhưng thiếu đủ căn cứ để phân loại chính xác hơn; tạm ghi theo Hán-Việt. |
+| 玉简首座 | Ngọc Giản Thủ Tọa | Chức danh/chung danh cho vị thủ tọa. |
+| 陆松首座 | Lục Tùng Thủ Tọa | Nhân vật/chức danh. |
+| 陈庆首座 | Trần Khánh Thủ Tọa | Chức danh của Trần Khánh. |
+| 萧四黎 | Tiêu Tứ Lê | Nhân vật. |
+| 一等月例 | nhất đẳng nguyệt lệ | Tiền lương/tháng bổng thông thường. |
+| 二道青纹丹药 | nhị đạo thanh văn đan dược | Đan dược có hoa văn cấp độ; thuật ngữ vật phẩm. |
+| 天演分镜 | Thiên Diễn Phân Kính | Vật phẩm/pháp khí liên quan phân kính. |
+| 符宝 | Phù Bảo | Bảo vật bùa chú. |
+| 四级以上道兵 | Tứ Cấp trở lên Đạo Binh | Phân cấp đạo binh. |
+| 玄青玉石 | Huyền Thanh Ngọc Thạch | Vật liệu/ngọc thạch. |
+| 青铜巨鼎 | Thanh Đồng Cự Đỉnh | Pháp khí/đồ vật. |
+| 青白色 | xanh trắng | Từ chỉ màu sắc thường dùng. |
+| 陈宗主 | Trần Tông Chủ | Cách xưng hô/chức danh. |
+| 蔡宁 | Thái Ninh | Nhân vật. |
+| 元靖 | Nguyên Tĩnh | Đồng nhất với Nguyên Tĩnh Thủ Tọa; là tên nhân vật/chức vị rút gọn. |
+| 陆松 | Lục Tùng | Đồng nhất với Lục Tùng Thủ Tọa; là tên nhân vật/chức vị rút gọn. |
+| 玉简 | Ngọc Giản | Đồng nhất với Ngọc Giản Thủ Tọa; là tên nhân vật/chức vị rút gọn. |
 ## Địa danh
 
 | Tiếng Trung | Tiếng Việt | Ghi chú |
@@ -87,6 +104,8 @@ Tên riêng phải dịch đúng theo bảng thuật ngữ bên dưới.
 | 万化道 | Vạn Hóa Đạo | Đạo thống/tông môn; dịch nghĩa + Hán Việt. |
 | 冲虚道 | Xung Hư Đạo | Đạo thống/tông môn; dịch nghĩa + Hán Việt. |
 | 沧浪道 | Thương Lãng Đạo | Đạo thống/tông môn; dịch nghĩa + Hán Việt. |
+| 太素道 | Thái Tố Đạo | Tên môn phái/tông môn; văn cảnh cho thấy là một đạo thống/tông môn. |
+| 无极道 | Vô Cực Đạo | Đạo thống. |
 ## Cảnh giới tu luyện
 
 | Tiếng Trung | Tiếng Việt | Ghi chú |

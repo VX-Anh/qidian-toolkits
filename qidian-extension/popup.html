@@ -13,17 +13,6 @@
     }
     h2 { font-size: 14px; color: #a78bfa; margin-bottom: 14px; }
     label { font-size: 11px; color: #9ca3af; display: block; margin-bottom: 4px; }
-    input[type="password"] {
-      width: 100%;
-      padding: 8px 10px;
-      background: #16213e;
-      border: 1px solid #2d2d5e;
-      border-radius: 6px;
-      color: #e0e0e0;
-      font-size: 12px;
-      margin-bottom: 12px;
-    }
-    input[type="password"]::placeholder { color: #4b5563; }
     #status {
       font-size: 12px;
       color: #9ca3af;
@@ -73,12 +62,10 @@
     .btn:last-child { margin-bottom: 0; }
     .btn:hover { opacity: 0.85; }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-    #btnTest    { background: #1e3a5f; color: #93c5fd; }
     #btnCapture { background: #7c3aed; color: #fff; }
-    #btnDownload { background: #065f46; color: #6ee7b7; display: none; }
+    #btnCopyTxt { background: #1e3a5f; color: #93c5fd; }
     .warning { font-size: 11px; color: #f59e0b; margin-bottom: 10px; display: none; }
     .divider { border: none; border-top: 1px solid #2d2d5e; margin: 12px 0; }
-    .section-title { font-size: 11px; color: #a78bfa; font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
     input[type="text"] {
       width: 100%;
       padding: 8px 10px;
@@ -90,38 +77,15 @@
       margin-bottom: 8px;
     }
     input[type="text"]::placeholder { color: #4b5563; }
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-    .toggle-row input[type="checkbox"] { accent-color: #7c3aed; width: 13px; height: 13px; cursor: pointer; }
-    .toggle-row label { font-size: 11px; color: #9ca3af; cursor: pointer; }
-    #pushStatus { font-size: 11px; color: #6ee7b7; margin-top: 6px; min-height: 14px; display: none; }
   </style>
 </head>
 <body>
   <h2>Qidian Chapter Scraper</h2>
-  <p style="font-size:11px;color:#6b7280;margin-bottom:12px">OCR xử lý qua VietPhase (localhost:9999)</p>
+  <p style="font-size:11px;color:#6b7280;margin-bottom:12px">Lưu chương về Downloads: ảnh (.jpg) hoặc văn bản (.txt)</p>
 
-  <hr class="divider" />
-  <div class="section-title">VietPhase Integration</div>
-  <label>Novel Slug</label>
+  <label>Novel Slug (tên thư mục lưu)</label>
   <input type="text" id="novelSlug" placeholder="vd: thien-dien-quyet" autocomplete="off" />
-  <div class="toggle-row">
-    <input type="checkbox" id="autoPush" />
-    <label for="autoPush">Tự gửi vào VietPhase sau OCR</label>
-  </div>
-  <div class="toggle-row">
-    <input type="checkbox" id="autoTranslate" />
-    <label for="autoTranslate">Tự dịch ngay sau khi gửi</label>
-  </div>
-  <div class="toggle-row">
-    <input type="checkbox" id="autoOcr" />
-    <label for="autoOcr">Tự động OCR khi mở popup trên chapter</label>
-  </div>
-  <div id="pushStatus"></div>
+
   <hr class="divider" />
 
   <div id="status">Mở một trang chapter để bắt đầu.</div>
@@ -129,9 +93,9 @@
   <p class="warning" id="warning">⏳ Đang chụp — banner vàng trên trình duyệt là bình thường.</p>
   <div id="preview"></div>
   <div id="charCount"></div>
-  <button class="btn" id="btnTest">Chụp thử (xem ảnh)</button>
-  <button class="btn" id="btnCapture">Chụp &amp; OCR → .txt</button>
-  <button class="btn" id="btnDownload">Download .txt</button>
+
+  <button class="btn" id="btnCapture">📷 Chụp ảnh → .jpg</button>
+  <button class="btn" id="btnCopyTxt">📋 Copy text → .txt</button>
   <script src="popup.js"></script>
 </body>
 </html>

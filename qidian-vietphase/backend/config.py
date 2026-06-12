@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o"
+    openai_model: str = "gpt-5.4-mini"
 
     input_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\input")
     output_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\output")
