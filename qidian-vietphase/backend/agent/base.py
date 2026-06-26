@@ -1,10 +1,11 @@
 import asyncio
-import json
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 
+from ..config import settings
 from .tools import ToolRegistry
 
 
@@ -18,90 +19,38 @@ class AgentEvent:
         return {"agent": self.agent_id, "type": self.type, **self.data}
 
 
-class _ContentStreamer:
-    """Trích xuất và stream giá trị field 'content' từ JSON arguments của save_chapter.
+def _frag_kv(frag) -> tuple[str, object, bool]:
+    """Giải mã 1 fragment partial_args của genai → (key, value, is_string).
 
-    Arguments được gửi dưới dạng chuỗi JSON streaming, ví dụ:
-        {"vi_title": "Thiên Diễn Quyết", "content": "Chương 675\\n\\nNội dung..."}
-    Class này phát hiện khi nào đang ở trong value của "content" và trả về
-    các ký tự đã decode (xử lý JSON escape sequences).
+    Fragment có json_path kiểu '$.content' và một trong các *_value đã decode sẵn.
+    Trả về is_string=True cho string_value (để nối chuỗi + stream live).
     """
-    _MARKER = '"content":'
-
-    def __init__(self):
-        self._buf = ""
-        self._active = False   # đang bên trong value của content
-        self._escape = False   # đang xử lý escape sequence
-
-    def feed(self, chunk: str) -> str:
-        """Trả về chuỗi decoded content (có thể rỗng nếu chưa đến phần content)."""
-        out = []
-        self._buf += chunk
-
-        if not self._active:
-            if self._MARKER not in self._buf:
-                keep = len(self._MARKER) + 4
-                if len(self._buf) > keep:
-                    self._buf = self._buf[-keep:]
-                return ""
-            pos = self._buf.index(self._MARKER) + len(self._MARKER)
-            rest = self._buf[pos:].lstrip()
-            if not rest.startswith('"'):
-                self._buf = rest
-                return ""
-            self._active = True
-            self._buf = rest[1:]
-
-        i = 0
-        buf = self._buf
-        while i < len(buf):
-            c = buf[i]
-            if self._escape:
-                self._escape = False
-                if   c == 'n':  out.append('\n')
-                elif c == 't':  out.append('\t')
-                elif c == 'r':  out.append('\r')
-                elif c == '"':  out.append('"')
-                elif c == '\\': out.append('\\')
-                elif c == 'u':
-                    # \uXXXX — OpenAI có thể escape tiếng Việt thành dạng này
-                    if i + 4 < len(buf):
-                        try:
-                            out.append(chr(int(buf[i + 1:i + 5], 16)))
-                            i += 4
-                        except ValueError:
-                            out.append('\\u')
-                    else:
-                        # Chưa đủ dữ liệu, lưu lại để xử lý ở chunk tiếp
-                        self._buf = buf[i - 1:]
-                        return "".join(out)
-                else:
-                    out.append('\\')
-                    out.append(c)
-            elif c == '\\':
-                self._escape = True
-            elif c == '"':
-                self._active = False
-                self._buf = buf[i + 1:]
-                return "".join(out)
-            else:
-                out.append(c)
-            i += 1
-
-        self._buf = ""
-        return "".join(out)
+    path = frag.json_path or ""
+    key = path[2:] if path.startswith("$.") else path
+    key = key.split(".")[0].strip("[]'\"")
+    if frag.string_value is not None:
+        return key, frag.string_value, True
+    if frag.number_value is not None:
+        return key, frag.number_value, False
+    if frag.bool_value is not None:
+        return key, frag.bool_value, False
+    if getattr(frag, "null_value", None) is not None:
+        return key, None, False
+    return key, None, False
 
 
 class BaseAgent:
     MAX_ITER = 20
-    TOOL_CHOICE = "auto"
+    TOOL_CHOICE = "auto"  # auto | required | none
 
-    def __init__(self, agent_id: str, client: AsyncOpenAI, registry: ToolRegistry, model: str):
+    def __init__(self, agent_id: str, client: genai.Client, registry: ToolRegistry, model: str):
         self.agent_id = agent_id
         self.client = client
         self.registry = registry
         self.model = model
-        self.messages: list[dict] = []
+        # Lịch sử hội thoại dạng genai Content (giữ nguyên thought_signature trong
+        # các part function_call để Gemini 3 không lỗi 400 ở vòng tool đa lượt).
+        self.history: list[types.Content] = []
 
     def _system_prompt(self) -> str:
         raise NotImplementedError
@@ -109,94 +58,141 @@ class BaseAgent:
     def _emit(self, type: str, **data) -> AgentEvent:
         return AgentEvent(agent_id=self.agent_id, type=type, data=data)
 
+    def _gen_config(self) -> types.GenerateContentConfig:
+        tools = self.registry.genai_tools()
+        if self.TOOL_CHOICE == "none" or not tools:
+            mode = types.FunctionCallingConfigMode.NONE
+        elif self.TOOL_CHOICE in ("required", "any"):
+            mode = types.FunctionCallingConfigMode.ANY
+        else:
+            mode = types.FunctionCallingConfigMode.AUTO
+
+        level = getattr(types.ThinkingLevel, settings.thinking_level.upper(),
+                        types.ThinkingLevel.LOW)
+
+        return types.GenerateContentConfig(
+            system_instruction=self._system_prompt(),
+            temperature=1.0,  # Gemini 3 khuyến nghị giữ mặc định 1.0
+            max_output_tokens=settings.max_output_tokens,
+            thinking_config=types.ThinkingConfig(thinking_level=level),
+            tools=tools or None,
+            tool_config=types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=mode,
+                    # Stream từng mảnh JSON arguments để hiện bản dịch live (save_chapter)
+                    stream_function_call_arguments=bool(tools),
+                )
+            ),
+        )
+
     async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
-        self.messages = [
-            {"role": "system", "content": self._system_prompt()},
-            {"role": "user", "content": user_message},
+        self.history = [
+            types.Content(role="user", parts=[types.Part(text=user_message)])
         ]
+        config = self._gen_config()
 
         for iteration in range(self.MAX_ITER):
             yield self._emit("thinking", iteration=iteration)
 
-            stream = await self.client.chat.completions.create(
+            stream = await self.client.aio.models.generate_content_stream(
                 model=self.model,
-                messages=self.messages,
-                tools=self.registry.schemas() or None,
-                tool_choice=self.TOOL_CHOICE if self.registry.schemas() else "none",
-                stream=True,
+                contents=self.history,
+                config=config,
             )
 
-            full_content = ""
-            # key = tool call index, value = accumulated fields
-            acc: dict[int, dict] = {}
-            streamer = _ContentStreamer()
+            full_text = ""
+            fcalls: list[dict] = []   # [{name, id, args, raw, sig}]
+            cur: dict | None = None   # call đang nhận partial args
+            pending_sig = None        # thought_signature chờ gắn vào function_call
+            streamed_content = False  # đã stream nội dung save_chapter chưa
 
             async for chunk in stream:
-                if not chunk.choices:
+                if not chunk.candidates or not chunk.candidates[0].content:
                     continue
-                delta = chunk.choices[0].delta
+                for part in (chunk.candidates[0].content.parts or []):
+                    sig = getattr(part, "thought_signature", None)
+                    if sig:
+                        pending_sig = sig
 
-                # Stream text tokens (khi model trả lời text thay vì tool call)
-                if delta.content:
-                    full_content += delta.content
-                    yield self._emit("token", text=delta.content)
+                    fc = getattr(part, "function_call", None)
+                    if fc is not None:
+                        if fc.name:  # tên chỉ xuất hiện ở chunk đầu của mỗi call
+                            cur = {"name": fc.name, "id": fc.id or "",
+                                   "args": {}, "raw": None, "sig": None}
+                            fcalls.append(cur)
+                        if cur is not None:
+                            if pending_sig is not None:
+                                cur["sig"] = pending_sig
+                                pending_sig = None
+                            if fc.args:  # fallback non-stream: dict args đầy đủ
+                                cur["raw"] = dict(fc.args)
+                            # partial_args = list fragment {json_path, *_value}
+                            for frag in (fc.partial_args or []):
+                                key, val, is_str = _frag_kv(frag)
+                                if not key:
+                                    continue
+                                if is_str:
+                                    cur["args"][key] = cur["args"].get(key, "") + val
+                                    if cur["name"] == "save_chapter" and key == "content" and val:
+                                        streamed_content = True
+                                        yield self._emit("token", text=val)
+                                else:
+                                    cur["args"][key] = val
+                        continue
 
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        if idx not in acc:
-                            acc[idx] = {"id": "", "name": "", "arguments": ""}
-                        if tc.id:
-                            acc[idx]["id"] += tc.id
-                        if tc.function:
-                            if tc.function.name:
-                                acc[idx]["name"] += tc.function.name
-                            if tc.function.arguments:
-                                arg_chunk = tc.function.arguments
-                                acc[idx]["arguments"] += arg_chunk
-                                # Stream nội dung dịch từ save_chapter arguments
-                                if acc[idx]["name"] == "save_chapter":
-                                    text = streamer.feed(arg_chunk)
-                                    if text:
-                                        yield self._emit("token", text=text)
+                    # Part văn bản thường (bỏ qua thought summary)
+                    if getattr(part, "text", None) and not getattr(part, "thought", False):
+                        full_text += part.text
+                        yield self._emit("token", text=part.text)
 
             # Không có tool call → model đã trả lời xong
-            if not acc:
-                self.messages.append({"role": "assistant", "content": full_content})
-                yield self._emit("done", content=full_content)
+            if not fcalls:
+                self.history.append(types.Content(
+                    role="model", parts=[types.Part(text=full_text)]))
+                yield self._emit("done", content=full_text)
                 return
 
-            # Tái tạo message assistant với tool_calls để đưa vào history
-            tool_calls_list = [
-                {
-                    "id": acc[i]["id"],
-                    "type": "function",
-                    "function": {"name": acc[i]["name"], "arguments": acc[i]["arguments"]},
-                }
-                for i in sorted(acc.keys())
-            ]
-            msg: dict = {"role": "assistant", "tool_calls": tool_calls_list}
-            if full_content:
-                msg["content"] = full_content
-            self.messages.append(msg)
+            # Resolve arguments cuối: ưu tiên dict đầy đủ, fallback dict tái tạo từ fragment
+            for c in fcalls:
+                c["final"] = c["raw"] if c["raw"] is not None else c["args"]
 
-            yield self._emit("tool_call", tools=[acc[i]["name"] for i in sorted(acc.keys())])
+            # Tái tạo turn của model — giữ thought_signature trên part function_call
+            model_parts: list[types.Part] = []
+            if full_text:
+                model_parts.append(types.Part(text=full_text))
+            for c in fcalls:
+                model_parts.append(types.Part(
+                    function_call=types.FunctionCall(
+                        name=c["name"], args=c["final"], id=c["id"] or None),
+                    thought_signature=c["sig"],
+                ))
+            self.history.append(types.Content(role="model", parts=model_parts))
+
+            # Nếu save_chapter không stream partial (model trả args 1 lần) → emit content 1 lần
+            if not streamed_content:
+                for c in fcalls:
+                    if c["name"] == "save_chapter" and isinstance(c["final"], dict):
+                        content = c["final"].get("content")
+                        if content:
+                            yield self._emit("token", text=content)
+
+            yield self._emit("tool_call", tools=[c["name"] for c in fcalls])
 
             # Thực thi tất cả tool calls song song
             results = await asyncio.gather(*[
-                self.registry.call(acc[i]["name"], json.loads(acc[i]["arguments"]))
-                for i in sorted(acc.keys())
+                self.registry.call(c["name"], c["final"]) for c in fcalls
             ])
 
-            for i, result in zip(sorted(acc.keys()), results):
-                self.messages.append({
-                    "role": "tool",
-                    "tool_call_id": acc[i]["id"],
-                    "content": result.to_content(),
-                })
+            tool_parts = [
+                types.Part.from_function_response(name=c["name"], response=r.to_response())
+                for c, r in zip(fcalls, results)
+            ]
+            self.history.append(types.Content(role="tool", parts=tool_parts))
+
+            for c, result in zip(fcalls, results):
                 yield self._emit(
                     "tool_result",
-                    tool=acc[i]["name"],
+                    tool=c["name"],
                     success=result.success,
                     preview=str(result.data)[:300] if result.success else result.error,
                 )

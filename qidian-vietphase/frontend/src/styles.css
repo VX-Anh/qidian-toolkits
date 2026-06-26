@@ -1403,3 +1403,114 @@ input[type="checkbox"] {
   animation: ocrslide 1.2s ease-in-out infinite;
   border-radius: 9999px;
 }
+
+/* ── In-pane editor (sửa bản gốc / bản dịch) ─────────────────────────── */
+.pane-editor {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: var(--bg-app);
+  color: var(--fg-1);
+  padding: 24px 32px;
+  font-size: 15px;
+  line-height: 2;
+}
+.tv-pane.vi .pane-editor { font-family: var(--font-serif); }
+.tv-pane.zh .pane-editor,
+.tv-pane.ocr .pane-editor {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--fg-2);
+}
+.pane-editor:focus { background: var(--bg-app); }
+.editor-dirty-dot {
+  width: 6px; height: 6px; border-radius: 9999px;
+  background: var(--amber-400);
+  display: inline-block;
+}
+
+/* Selectable source body: tint the native selection so the add-term affordance reads */
+.ocr-text ::selection,
+.tv-pane.zh .tv-pane-body ::selection { background: rgba(99,102,241,0.35); color: #fff; }
+
+/* ── Floating "add term" popover from a text selection ───────────────── */
+.term-pop {
+  position: fixed;
+  z-index: 50;
+  transform: translate(-50%, -100%);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  animation: fadeInUp 0.12s ease;
+}
+.term-pop::after {
+  content: "";
+  position: absolute;
+  bottom: -5px; left: 50%;
+  width: 9px; height: 9px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-hover);
+  border-bottom: 1px solid var(--border-hover);
+}
+.term-pop .sel-zh {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-1);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+}
+
+/* ── Add-term form card (popover, anchored to selection) ─────────────── */
+.term-form {
+  position: fixed;
+  z-index: 51;
+  transform: translate(-50%, -100%);
+  width: 320px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: fadeInUp 0.12s ease;
+}
+.term-form h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-2);
+  display: flex; align-items: center; gap: 6px;
+}
+.term-form .seg {
+  display: flex; gap: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px;
+}
+.term-form .seg button {
+  flex: 1;
+  padding: 5px 4px;
+  font-size: 11px;
+  border: 0; border-radius: 4px;
+  background: transparent;
+  color: var(--fg-3);
+  font-family: inherit;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+}
+.term-form .seg button.on { background: var(--bg-app); color: var(--fg-1); }
+.term-form .row { display: flex; gap: 8px; align-items: center; }
+.term-form .row .arrow { color: var(--fg-5); font-size: 13px; }

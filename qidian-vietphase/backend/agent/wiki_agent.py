@@ -13,7 +13,7 @@ glossary đã-duyệt, chỉ dùng đề xuất của model khi term chưa có t
 from pathlib import Path
 from typing import AsyncIterator, Optional
 
-from openai import AsyncOpenAI
+from google import genai
 
 from ..config import settings
 from .base import AgentEvent, BaseAgent
@@ -113,7 +113,7 @@ class WikiAgent(BaseAgent):
         source_content: str,
         profile: NovelProfile,
         state: SharedState,
-        client: AsyncOpenAI,
+        client: genai.Client,
     ):
         self.filename = filename
         self.chapter_num = chapter_num
@@ -125,7 +125,7 @@ class WikiAgent(BaseAgent):
             agent_id=f"wiki:{filename}",
             client=client,
             registry=reg,
-            model=settings.openai_model,
+            model=settings.llm_model,
         )
 
     def _system_prompt(self) -> str:

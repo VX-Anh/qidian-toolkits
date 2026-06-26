@@ -371,8 +371,12 @@ function App() {
               : c
           ));
         } else if (type === "error") {
-          // Orchestrator-level fatal error (no chapter file)
+          // Orchestrator-level fatal error (no chapter file) → kết thúc job,
+          // tắt spinner thay vì để quay mãi.
+          setIsRunning(false);
+          if (esRef.current) { esRef.current.close(); esRef.current = null; }
           setToast({ msg: `Lỗi: ${event.msg || event.error || "không xác định"}`, type: "error" });
+          if (currentSlugRef.current === jobSlug) loadChapters(jobSlug);
         } else if (type === "review_summary") {
           // Refresh review badges/issues from DB after the batch is reviewed
           if (currentSlugRef.current === jobSlug) loadChapters(jobSlug);
@@ -601,6 +605,25 @@ function App() {
       setToast({ msg: "Đã xoá thuật ngữ", type: "success" });
     } catch (err) {
       setToast({ msg: `Lỗi xoá thuật ngữ: ${err.message}`, type: "error" });
+    }
+  }
+
+  // ── In-pane edits from TranslationView (sửa bản gốc / bản dịch) ───────
+  async function onSaveSourceText(filename, text) {
+    try {
+      await api.put(`/api/chapters/${encodeURIComponent(filename)}/source`, { content: text });
+      setToast({ msg: "Đã lưu bản gốc", type: "success" });
+    } catch (err) {
+      setToast({ msg: `Lỗi lưu bản gốc: ${err.message}`, type: "error" });
+    }
+  }
+
+  async function onSaveOutputText(filename, text) {
+    try {
+      await api.put(`/api/chapters/${encodeURIComponent(filename)}/output`, { content: text });
+      setToast({ msg: "Đã lưu bản dịch", type: "success" });
+    } catch (err) {
+      setToast({ msg: `Lỗi lưu bản dịch: ${err.message}`, type: "error" });
     }
   }
 
@@ -840,6 +863,9 @@ function App() {
             setToast({ msg: "Bắt đầu dịch lại chương này…", type: "info" });
           }}
           onIngestWiki={() => ingestWiki([openChapter.filename])}
+          onAddTerm={onAddGloss}
+          onSaveSource={(text) => onSaveSourceText(openChapter.filename, text)}
+          onSaveOutput={(text) => onSaveOutputText(openChapter.filename, text)}
         />
       )}
 

@@ -2,6 +2,39 @@
 
 const { useState: useStateSt } = React;
 
+// ── novel.md parse/serialize helpers ──────────────────────────────────
+function stGetFm(md, key) {
+  const m = md.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return "";
+  const line = m[1].split("\n").find(l => l.startsWith(key + ":"));
+  if (!line) return "";
+  return line.slice(key.length + 1).trim().replace(/^["']|["']$/g, "");
+}
+
+function stSetFm(md, key, value) {
+  const m = md.match(/^(---\n)([\s\S]*?)(\n---)/);
+  if (!m) return md;
+  const lines = m[2].split("\n");
+  let found = false;
+  const next = lines.map(l => {
+    if (l.startsWith(key + ":")) { found = true; return `${key}: ${value}`; }
+    return l;
+  });
+  if (!found) next.push(`${key}: ${value}`);
+  return m[1] + next.join("\n") + m[3] + md.slice(m[0].length);
+}
+
+function stGetPrompt(md) {
+  const m = md.match(/## Prompt dịch\s*\n([\s\S]*?)(?=\n## |$)/);
+  return m ? m[1].trim() : "";
+}
+
+function stSetPrompt(md, value) {
+  const re = /(## Prompt dịch\s*\n)([\s\S]*?)(?=\n## |$)/;
+  if (!re.test(md)) return md;
+  return md.replace(re, `$1\n${value}\n`);
+}
+
 function SettingsScreen({ novel, novelMd, onChange, onSave }) {
   const [tab, setTab] = useStateSt("config"); // config | raw
 
@@ -55,7 +88,11 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
                   </div>
                   <div className="field">
                     <label>Thể loại</label>
-                    <select className="input-field" defaultValue={novel.genre}>
+                    <select
+                      className="input-field"
+                      value={stGetFm(novelMd, "genre") || novel.genre || "tiên hiệp"}
+                      onChange={e => onChange(stSetFm(novelMd, "genre", e.target.value))}
+                    >
                       <option value="tiên hiệp">Tiên hiệp</option>
                       <option value="võ hiệp">Võ hiệp</option>
                       <option value="huyền huyễn">Huyền huyễn</option>
@@ -64,7 +101,11 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
                   </div>
                   <div className="field">
                     <label>Trạng thái</label>
-                    <select className="input-field" defaultValue="đang dịch">
+                    <select
+                      className="input-field"
+                      value={stGetFm(novelMd, "status") || "đang dịch"}
+                      onChange={e => onChange(stSetFm(novelMd, "status", e.target.value))}
+                    >
                       <option>đang dịch</option>
                       <option>tạm dừng</option>
                       <option>hoàn thành</option>
@@ -81,12 +122,9 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
               <div className="settings-card-body">
                 <div className="field" style={{ marginBottom: 0 }}>
                   <textarea
-                    defaultValue={`Bạn là dịch giả tiểu thuyết tiên hiệp Trung-Việt chuyên nghiệp.
-Dịch sang tiếng Việt tự nhiên, trang trọng, ưu tiên từ Hán Việt cho thuật ngữ tu luyện.
-Giữ nguyên cấu trúc đoạn văn gốc. Không thêm bình luận hay giải thích ngoài bản dịch.
-Tên riêng phải dịch đúng theo bảng thuật ngữ.`}
+                    value={stGetPrompt(novelMd)}
+                    onChange={e => onChange(stSetPrompt(novelMd, e.target.value))}
                     style={{ minHeight: 140 }}
-                    readOnly
                   />
                 </div>
               </div>
@@ -99,11 +137,12 @@ Tên riêng phải dịch đúng theo bảng thuật ngữ.`}
               <div className="settings-card-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}>
                   <label>Model</label>
-                  <select className="input-field" defaultValue="gpt-4o-mini">
-                    <option>gpt-4o</option>
+                  <select className="input-field" defaultValue="gemini-3.5-flash">
+                    <option>gemini-3.5-flash</option>
+                    <option>gemini-2.5-flash</option>
+                    <option>gemini-2.5-pro</option>
+                    <option>gemini-2.5-flash-lite</option>
                     <option>gpt-4o-mini</option>
-                    <option>claude-haiku-4-5</option>
-                    <option>claude-sonnet-4-5</option>
                   </select>
                 </div>
                 <div className="field" style={{ marginBottom: 0 }}>

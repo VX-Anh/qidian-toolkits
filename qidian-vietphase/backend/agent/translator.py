@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import AsyncIterator
 
-from openai import AsyncOpenAI
+from google import genai
 
 from ..config import settings
 from .base import BaseAgent, AgentEvent
@@ -66,6 +66,7 @@ def _make_registry(
             ChapterStatus.DONE,
             vi_title=vi_title,
             translated_path=str(out_path),
+            error=None,  # xóa lỗi sót lại từ lần dịch fail trước (vd 429) khi retry thành công
         )
         return f"Đã lưu: {out_path.name}"
 
@@ -91,7 +92,7 @@ class TranslatorAgent(BaseAgent):
         novel_slug: str,
         profile: NovelProfile,
         state: SharedState,
-        client: AsyncOpenAI,
+        client: genai.Client,
         rate_limiter: RateLimiter,
         output_dir: Path,
         review_issues: str | None = None,
@@ -107,7 +108,7 @@ class TranslatorAgent(BaseAgent):
             agent_id=f"translator:{filename}",
             client=client,
             registry=reg,
-            model=settings.openai_model,
+            model=settings.llm_model,
         )
 
     def _system_prompt(self) -> str:

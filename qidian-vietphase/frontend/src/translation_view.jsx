@@ -3,6 +3,8 @@
 //   • text chapter: 2-pane  Bản gốc | Bản dịch
 // Static data (source text, pre-translate segments, OCR images, saved output)
 // is fetched here; live streaming tokens come in via the `liveText` prop.
+// In-pane editing (sửa bản gốc / bản dịch) + thêm thuật ngữ từ bôi đen được
+// truyền lên qua các callback onSaveSource / onSaveOutput / onAddTerm.
 
 const { useState: useStateT, useEffect: useEffectT, useMemo: useMemoT, useRef: useRefT, useCallback: useCbT } = React;
 
@@ -10,6 +12,7 @@ function TranslationView({
   chapter, novel, novelSlug, glossary,
   liveText, isStreaming,
   onClose, onNext, onPrev, onRetranslate, onIngestWiki,
+  onAddTerm, onSaveSource, onSaveOutput,
 }) {
   const isImage = !!chapter?.ocr_job_id;
 
@@ -305,6 +308,8 @@ function TranslationView({
             ocrStatus={ocrStatus}
             ocrPage={ocrPage}
             ocrTotal={ocrTotal}
+            onAddTerm={onAddTerm}
+            onSaveSource={(text) => { setSourceText(text); setSegments(null); onSaveSource?.(text); }}
           />
         )}
 
@@ -315,6 +320,7 @@ function TranslationView({
             onTone={setTone}
             translated={translated}
             isStreaming={isStreaming}
+            onSaveOutput={onSaveOutput}
           />
         )}
       </div>
@@ -379,12 +385,42 @@ function ImagePane({ images, pageIdx, onPage }) {
 }
 
 // ── OCR / source pane (middle) ─────────────────────────────────────────
-function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight, chapter, ocrRunning, ocrStatus, ocrPage, ocrTotal }) {
+function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight, chapter, ocrRunning, ocrStatus, ocrPage, ocrTotal, onAddTerm, onSaveSource }) {
   // Default ON: show the source with glossary proper-nouns pre-replaced to
   // Vietnamese (the "VietPhase" step that runs before AI translation) — this
   // matches the panel's purpose ("Bản gốc đã thay tên").
   const [phased, setPhased] = useStateT(true);
   const [showOriginal, setShowOriginal] = useStateT(false);
+  const [editing, setEditing] = useStateT(false);
+  const [draft, setDraft] = useStateT("");
+  const [sel, setSel] = useStateT(null);       // { text, x, y } current selection
+  const [adding, setAdding] = useStateT(null);  // { zh, x, y } add-term form
+  const bodyRef = useRefT(null);
+
+  // Reset editor + selection state whenever the chapter changes.
+  useEffectT(() => { setEditing(false); setSel(null); setAdding(null); }, [chapter?.filename]);
+
+  // Dismiss the selection popover on an outside click.
+  useEffectT(() => {
+    if (!sel) return;
+    const clear = (e) => {
+      if (e.target.closest && (e.target.closest(".term-pop") || e.target.closest(".term-form"))) return;
+      setSel(null);
+    };
+    document.addEventListener("mousedown", clear);
+    return () => document.removeEventListener("mousedown", clear);
+  }, [sel]);
+
+  const enterEdit = () => { setDraft(sourceText || ""); setEditing(true); setSel(null); };
+  const commitEdit = () => { onSaveSource?.(draft); setEditing(false); };
+
+  const onBodyMouseUp = () => {
+    const s = window.getSelection();
+    const text = s && s.toString().trim();
+    if (!text) { setSel(null); return; }
+    const rect = s.getRangeAt(0).getBoundingClientRect();
+    setSel({ text, x: rect.left + rect.width / 2, y: rect.top });
+  };
 
   const charCount = sourceText.length;
   // Real substitution count from backend pre-translate, else count glossary hits in text.
@@ -405,19 +441,32 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
     <div className={`tv-pane ${isImage ? "ocr" : "zh"}`}>
       <div className="tv-pane-h">
         <span className="label">{isImage ? "Kết quả OCR" : "Bản gốc 中"}</span>
+        {editing && <span className="editor-dirty-dot" title="Có thay đổi chưa lưu" />}
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-5)", fontFamily: "var(--font-mono)" }}>
-          {charCount} ký tự
+          {(editing ? draft.length : charCount)} ký tự
         </span>
-        <button
-          className={`btn ${phased ? "primary" : ""} sm`}
-          onClick={() => setPhased(p => !p)}
-          title="Thay thuật ngữ glossary (Hán → Việt) trong văn bản gốc trước khi gửi cho AI dịch"
-        >
-          <Icon name="sparkles" size={11} />
-          VietPhase trước
-        </button>
+        {editing ? (
+          <>
+            <button className="btn success sm" onClick={commitEdit}><Icon name="save" size={11} /> Lưu</button>
+            <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
+          </>
+        ) : (
+          <>
+            <button
+              className={`btn ${phased ? "primary" : ""} sm`}
+              onClick={() => setPhased(p => !p)}
+              title="Thay thuật ngữ glossary (Hán → Việt) trong văn bản gốc trước khi gửi cho AI dịch"
+            >
+              <Icon name="sparkles" size={11} /> VietPhase trước
+            </button>
+            <button className="btn ghost sm" onClick={enterEdit} title="Sửa nội dung bản gốc">
+              <Icon name="edit" size={11} /> Sửa
+            </button>
+          </>
+        )}
       </div>
 
+      {!editing && (
       <div className={`phase-bar ${phased ? "" : "idle"}`}>
         <Icon name={phased ? "sparkles" : "hash"} size={12} />
         {phased ? (
@@ -440,8 +489,9 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
           </>
         )}
       </div>
+      )}
 
-      {ocrRunning && (
+      {ocrRunning && !editing && (
         <div className="phase-bar" style={{ background: "linear-gradient(90deg, var(--indigo-950), transparent)", flexWrap: "wrap" }}>
           <span className="spin">⟳</span>
           <OcrProgress page={ocrPage || 0} total={ocrTotal || 0} width={120} />
@@ -451,80 +501,201 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
         </div>
       )}
 
-      <div className={isImage ? "ocr-text" : "tv-pane-body"} style={isImage ? { flex: 1, overflowY: "auto" } : null}>
-        {!sourceText && !ocrRunning ? (
-          <div style={{ color: "var(--fg-4)", fontSize: 13, fontStyle: "italic" }}>
-            {isImage
-              ? "Chưa có text OCR cho chương này. Bấm “Chạy OCR” ở thanh trên để nhận dạng từ ảnh."
-              : "Không có nội dung gốc."}
-          </div>
-        ) : ocrStatus && ocrStatus.startsWith("Lỗi") ? (
-          <div style={{ color: "var(--red-400)", fontSize: 13 }}>{ocrStatus}</div>
-        ) : (
-          <SourceText
-            segments={segments}
-            rawText={sourceText}
-            glossary={glossary}
-            highlight={highlight}
-            phased={phased}
-            showOriginal={showOriginal}
-          />
-        )}
-      </div>
+      {editing ? (
+        <textarea
+          className="pane-editor"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          placeholder="Nội dung bản gốc…"
+          autoFocus
+        />
+      ) : (
+        <div
+          ref={bodyRef}
+          className={isImage ? "ocr-text" : "tv-pane-body"}
+          style={isImage ? { flex: 1, overflowY: "auto" } : null}
+          onMouseUp={onBodyMouseUp}
+        >
+          {!sourceText && !ocrRunning ? (
+            <div style={{ color: "var(--fg-4)", fontSize: 13, fontStyle: "italic" }}>
+              {isImage
+                ? "Chưa có text OCR cho chương này. Bấm “Chạy OCR” ở thanh trên để nhận dạng từ ảnh."
+                : "Không có nội dung gốc."}
+            </div>
+          ) : ocrStatus && ocrStatus.startsWith("Lỗi") ? (
+            <div style={{ color: "var(--red-400)", fontSize: 13 }}>{ocrStatus}</div>
+          ) : (
+            <SourceText
+              segments={segments}
+              rawText={sourceText}
+              glossary={glossary}
+              highlight={highlight}
+              phased={phased}
+              showOriginal={showOriginal}
+            />
+          )}
+        </div>
+      )}
+
+      {sel && !adding && (
+        <TermPop x={sel.x} y={sel.y} onAdd={() => { setAdding({ zh: sel.text, x: sel.x, y: sel.y }); setSel(null); }} />
+      )}
+      {adding && (
+        <AddTermForm
+          zh={adding.zh} x={adding.x} y={adding.y}
+          onSubmit={(cat, item) => { onAddTerm?.(cat, item); setAdding(null); const s = window.getSelection(); if (s) s.removeAllRanges(); }}
+          onCancel={() => setAdding(null)}
+        />
+      )}
     </div>
   );
 }
 
 // ── Vietnamese translation pane (right) ────────────────────────────────
-function ViPane({ chapter, tone, onTone, translated, isStreaming }) {
+function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput }) {
+  const [override, setOverride] = useStateT(null); // local saved edit
+  const [editing, setEditing] = useStateT(false);
+  const [draft, setDraft] = useStateT("");
+
+  useEffectT(() => { setOverride(null); setEditing(false); }, [chapter?.filename]);
+
+  const display = override != null ? override : translated;
+
   const copyToClipboard = () => {
-    if (!translated) return;
-    navigator.clipboard.writeText(translated).catch(() => {});
+    if (!display) return;
+    navigator.clipboard.writeText(display).catch(() => {});
   };
+  const enterEdit = () => { setDraft(display || ""); setEditing(true); };
+  const commitEdit = () => { setOverride(draft); onSaveOutput?.(draft); setEditing(false); };
 
   return (
     <div className="tv-pane vi">
       <div className="tv-pane-h">
         <span className="label">Bản dịch Việt</span>
+        {editing && <span className="editor-dirty-dot" title="Có thay đổi chưa lưu" />}
         {isStreaming && (
           <span className="badge in_progress" style={{ marginLeft: 8 }}>
             <span className="spin" style={{ marginRight: 2 }}>⟳</span> Đang dịch…
           </span>
         )}
-        <span className="chip" style={{ marginLeft: "auto" }}>
-          <Icon name="user" size={11} /> tone: {tone}
-        </span>
-        <select
-          className="input-field"
-          value={tone}
-          onChange={e => onTone(e.target.value)}
-          style={{ fontSize: 11, padding: "2px 8px" }}
-        >
-          <option value="trang trọng">Trang trọng</option>
-          <option value="phổ thông">Phổ thông</option>
-          <option value="cô đọng">Cô đọng</option>
-        </select>
-        <button className="btn ghost sm" onClick={copyToClipboard}>
-          <Icon name="copy" size={11} /> Sao chép
-        </button>
+        {editing ? (
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button className="btn success sm" onClick={commitEdit}><Icon name="save" size={11} /> Lưu</button>
+            <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
+          </div>
+        ) : (
+          <>
+            <span className="chip" style={{ marginLeft: "auto" }}>
+              <Icon name="user" size={11} /> tone: {tone}
+            </span>
+            <select
+              className="input-field"
+              value={tone}
+              onChange={e => onTone(e.target.value)}
+              style={{ fontSize: 11, padding: "2px 8px" }}
+            >
+              <option value="trang trọng">Trang trọng</option>
+              <option value="phổ thông">Phổ thông</option>
+              <option value="cô đọng">Cô đọng</option>
+            </select>
+            <button className="btn ghost sm" onClick={copyToClipboard}>
+              <Icon name="copy" size={11} /> Sao chép
+            </button>
+            <button className="btn ghost sm" onClick={enterEdit} disabled={isStreaming} title="Sửa bản dịch">
+              <Icon name="edit" size={11} /> Sửa
+            </button>
+          </>
+        )}
       </div>
-      <div className="tv-pane-body">
-        {!translated && !isStreaming && (
-          <span style={{ color: "var(--fg-4)", fontStyle: "italic", fontSize: 13 }}>
-            Chương chưa được dịch. Nhấn “Dịch lại” để bắt đầu.
-          </span>
-        )}
-        {!translated && isStreaming && (
-          <span style={{ color: "var(--fg-4)", fontStyle: "italic", fontSize: 13 }}>
-            Đang khởi tạo bản dịch…<span className="caret" style={{ color: "var(--accent)" }}>▍</span>
-          </span>
-        )}
-        {translated && (
-          <span style={{ whiteSpace: "pre-wrap" }}>
-            {translated}
-            {isStreaming && <span className="caret" style={{ color: "var(--accent)" }}>▍</span>}
-          </span>
-        )}
+      {editing ? (
+        <textarea
+          className="pane-editor"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          placeholder="Bản dịch tiếng Việt…"
+          autoFocus
+        />
+      ) : (
+        <div className="tv-pane-body">
+          {!display && !isStreaming && (
+            <span style={{ color: "var(--fg-4)", fontStyle: "italic", fontSize: 13 }}>
+              Chương chưa được dịch. Nhấn “Dịch lại” để bắt đầu.
+            </span>
+          )}
+          {!display && isStreaming && (
+            <span style={{ color: "var(--fg-4)", fontStyle: "italic", fontSize: 13 }}>
+              Đang khởi tạo bản dịch…<span className="caret" style={{ color: "var(--accent)" }}>▍</span>
+            </span>
+          )}
+          {display && (
+            <span style={{ whiteSpace: "pre-wrap" }}>
+              {display}
+              {isStreaming && <span className="caret" style={{ color: "var(--accent)" }}>▍</span>}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Floating popover offering to add the current selection as a term ───
+function TermPop({ x, y, onAdd }) {
+  return (
+    <div className="term-pop" style={{ left: x, top: y - 6 }}>
+      <button className="btn primary sm" onClick={onAdd}>
+        <Icon name="plus" size={11} /> Thêm thuật ngữ
+      </button>
+    </div>
+  );
+}
+
+const TERM_CATS = [
+  { id: "characters", label: "Nhân vật", icon: "user" },
+  { id: "places",     label: "Địa danh", icon: "map" },
+  { id: "realms",     label: "Cảnh giới", icon: "layers" },
+  { id: "skills",     label: "Kỹ năng", icon: "zap" },
+];
+
+function AddTermForm({ zh, x, y, onSubmit, onCancel }) {
+  const [cat, setCat] = useStateT("characters");
+  const [z, setZ] = useStateT(zh);
+  const [vi, setVi] = useStateT("");
+  const [notes, setNotes] = useStateT("");
+  const viRef = useRefT(null);
+  useEffectT(() => { const t = setTimeout(() => viRef.current?.focus(), 30); return () => clearTimeout(t); }, []);
+
+  const submit = () => { if (z.trim() && vi.trim()) onSubmit(cat, { zh: z.trim(), vi: vi.trim(), notes: notes.trim() }); };
+
+  const left = Math.min(Math.max(170, x), window.innerWidth - 170);
+  const top = Math.max(200, y - 6);
+
+  return (
+    <div className="term-form" style={{ left, top }} onMouseDown={e => e.stopPropagation()}>
+      <h4><Icon name="hash" size={12} color="var(--accent)" /> Thêm thuật ngữ vào glossary</h4>
+      <div className="seg">
+        {TERM_CATS.map(c => (
+          <button key={c.id} className={cat === c.id ? "on" : ""} onClick={() => setCat(c.id)}>
+            <Icon name={c.icon} size={11} /> {c.label}
+          </button>
+        ))}
+      </div>
+      <div className="row">
+        <input className="input-field" value={z} onChange={e => setZ(e.target.value)}
+          style={{ width: 110, fontFamily: "var(--font-mono)" }} placeholder="中" />
+        <span className="arrow">→</span>
+        <input ref={viRef} className="input-field" value={vi} onChange={e => setVi(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }}
+          style={{ flex: 1 }} placeholder="Tiếng Việt" />
+      </div>
+      <input className="input-field" value={notes} onChange={e => setNotes(e.target.value)}
+        placeholder="Ghi chú (tuỳ chọn)"
+        onKeyDown={e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }} />
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+        <button className="btn ghost sm" onClick={onCancel}>Hủy</button>
+        <button className="btn primary sm" onClick={submit} disabled={!z.trim() || !vi.trim()}>
+          <Icon name="plus" size={11} /> Thêm
+        </button>
       </div>
     </div>
   );

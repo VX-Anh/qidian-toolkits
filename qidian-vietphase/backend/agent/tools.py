@@ -1,8 +1,9 @@
 import asyncio
-import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, get_type_hints
+
+from google.genai import types
 
 
 @dataclass
@@ -17,38 +18,49 @@ class ToolResult:
             return json.dumps(self.data) if not isinstance(self.data, str) else self.data
         return f"ERROR: {self.error}"
 
+    def to_response(self) -> dict:
+        """Function response dict cho genai Part.from_function_response."""
+        if not self.success:
+            return {"error": self.error}
+        return self.data if isinstance(self.data, dict) else {"result": self.data}
 
-def _py_type_to_json(annotation) -> dict:
-    mapping = {str: "string", int: "integer", float: "number", bool: "boolean"}
-    return {"type": mapping.get(annotation, "string")}
+
+_TYPE_MAP = {str: "STRING", int: "INTEGER", float: "NUMBER", bool: "BOOLEAN"}
+
+
+def _py_type_to_genai(annotation) -> types.Schema:
+    return types.Schema(type=_TYPE_MAP.get(annotation, "STRING"))
 
 
 class ToolRegistry:
     def __init__(self):
         self._fns: dict[str, Callable] = {}
-        self._schemas: list[dict] = []
+        self._decls: list[types.FunctionDeclaration] = []
 
     def register(self, fn: Callable, name: str, description: str):
         hints = get_type_hints(fn)
         hints.pop("return", None)
-        props = {k: _py_type_to_json(v) for k, v in hints.items()}
+        props = {k: _py_type_to_genai(v) for k, v in hints.items()}
 
-        self._schemas.append({
-            "type": "function",
-            "function": {
-                "name": name,
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": props,
-                    "required": list(props.keys()),
-                },
-            },
-        })
+        self._decls.append(types.FunctionDeclaration(
+            name=name,
+            description=description,
+            parameters=types.Schema(
+                type="OBJECT",
+                properties=props,
+                required=list(props.keys()),
+            ),
+        ))
         self._fns[name] = fn
 
-    def schemas(self) -> list[dict]:
-        return self._schemas
+    def genai_tools(self) -> list[types.Tool]:
+        """Bọc tất cả function declarations thành list[types.Tool] cho genai."""
+        if not self._decls:
+            return []
+        return [types.Tool(function_declarations=self._decls)]
+
+    def has_tools(self) -> bool:
+        return bool(self._decls)
 
     async def call(self, name: str, kwargs: dict) -> ToolResult:
         fn = self._fns.get(name)

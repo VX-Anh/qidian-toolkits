@@ -1,9 +1,9 @@
 import asyncio
-import base64
 import re
 from pathlib import Path
 
-from openai import AsyncOpenAI
+from google import genai
+from google.genai import types
 
 from .orchestrator import parse_chapter_filename
 from .state import EventQueue, SharedState
@@ -39,31 +39,27 @@ async def run_ocr(
     image_paths: list[Path],
     state: SharedState,
     event_queue: EventQueue,
-    client: AsyncOpenAI,
+    client: genai.Client,
     settings,
     out_filename: str | None = None,
 ):
     try:
-        await event_queue.put({"type": "ocr_progress", "step": "ocr", "msg": "Đang OCR với OpenAI..."})
+        await event_queue.put({"type": "ocr_progress", "step": "ocr",
+                               "msg": f"Đang OCR với Gemini ({settings.llm_vision_model})..."})
 
-        images_b64 = [base64.b64encode(p.read_bytes()).decode() for p in image_paths]
-        content = [
-            {"type": "text", "text": OCR_PROMPT},
-            *[
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}", "detail": "high"}}
-                for b in images_b64
-            ],
+        parts = [types.Part(text=OCR_PROMPT)] + [
+            types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg")
+            for p in image_paths
         ]
 
         text_chunks: list[str] = []
-        stream = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": content}],
-            max_tokens=16000,
-            stream=True,
+        stream = await client.aio.models.generate_content_stream(
+            model=settings.llm_vision_model,
+            contents=[types.Content(role="user", parts=parts)],
+            config=types.GenerateContentConfig(max_output_tokens=16000),
         )
         async for chunk in stream:
-            delta = chunk.choices[0].delta.content if chunk.choices else None
+            delta = chunk.text
             if delta:
                 text_chunks.append(delta)
                 await event_queue.put({"type": "ocr_token", "text": delta})
@@ -99,7 +95,7 @@ async def run_paddle_ocr(
     image_paths: list[Path],
     state: SharedState,
     event_queue: EventQueue,
-    client: AsyncOpenAI,  # không dùng — giữ cùng chữ ký với run_ocr
+    client: genai.Client,  # không dùng — giữ cùng chữ ký với run_ocr
     settings,
     out_filename: str | None = None,
 ):

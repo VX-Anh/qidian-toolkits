@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import AsyncIterator
 
-from openai import AsyncOpenAI
+from google import genai
 
 from ..config import settings
 from .base import BaseAgent, AgentEvent
@@ -55,14 +55,14 @@ def _make_registry(state: SharedState, rules_dir: Path, slug: str) -> ToolRegist
 
 
 class ExtractorAgent(BaseAgent):
-    def __init__(self, slug: str, state: SharedState, client: AsyncOpenAI, rules_dir: Path):
+    def __init__(self, slug: str, state: SharedState, client: genai.Client, rules_dir: Path):
         self.slug = slug
         reg = _make_registry(state, rules_dir, slug)
         super().__init__(
             agent_id=f"extractor:{slug}",
             client=client,
             registry=reg,
-            model=settings.openai_model,
+            model=settings.llm_model,
         )
 
     def _system_prompt(self) -> str:

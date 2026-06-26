@@ -2,7 +2,7 @@ import asyncio
 import re
 from pathlib import Path
 
-from openai import AsyncOpenAI
+from google import genai
 
 from ..config import settings
 from .extractor import ExtractorAgent
@@ -32,7 +32,7 @@ class Orchestrator:
         rules_dir: Path,
         state: SharedState,
         event_queue: EventQueue,
-        client: AsyncOpenAI,
+        client: genai.Client,
         chapter_filenames: list[str] | None = None,
         force: bool = False,
         run_wiki: bool = True,
@@ -47,7 +47,7 @@ class Orchestrator:
         self.chapter_filenames = chapter_filenames  # None = dịch tất cả
         self.force = force  # True = dịch lại kể cả chương đã DONE
         self.run_wiki = run_wiki  # False = chỉ dịch, bỏ bước đưa vào Story-Wiki
-        self.rate_limiter = RateLimiter(rpm=500, tpm=150_000)
+        self.rate_limiter = RateLimiter(rpm=settings.llm_rpm, tpm=settings.llm_tpm)
 
     async def run(self):
         try:
@@ -199,6 +199,21 @@ class Orchestrator:
                 )
                 async for event in agent.run():
                     await self.event_queue.put(event.to_dict())
+
+                # Agent có thể kết thúc mà không gọi save_chapter (model trả lời
+                # text rồi dừng, hoặc chạm MAX_ITER) → status kẹt 'in_progress'.
+                # Gỡ kẹt ngay để UI không treo ở 50%.
+                final = self.state.get_chapter(filename)
+                if final and final["status"] == ChapterStatus.IN_PROGRESS:
+                    if final.get("translated_path"):
+                        await self.state.set_status(filename, ChapterStatus.DONE, error=None)
+                    else:
+                        await self.state.set_status(
+                            filename, ChapterStatus.FAILED,
+                            error="Agent kết thúc nhưng không gọi save_chapter",
+                        )
+                        await self._emit("translator", "error", file=filename,
+                                         error="Không lưu được bản dịch (agent không gọi save_chapter)")
 
             except Exception as exc:
                 await self.state.set_status(filename, ChapterStatus.FAILED, error=str(exc))
