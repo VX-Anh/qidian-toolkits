@@ -1,12 +1,14 @@
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const btnCapture     = document.getElementById('btnCapture');   // chụp ảnh → .jpg
 const btnCopyTxt     = document.getElementById('btnCopyTxt');    // copy text → .txt
+const btnSendServer  = document.getElementById('btnSendServer'); // gửi text → server
 const statusEl       = document.getElementById('status');
 const progressBar    = document.getElementById('progressBar');
 const previewEl      = document.getElementById('preview');
 const charCountEl    = document.getElementById('charCount');
 const warningEl      = document.getElementById('warning');
 const novelSlugInput = document.getElementById('novelSlug');
+const serverUrlInput = document.getElementById('serverUrl');
 
 // ── Capture tuning ────────────────────────────────────────────────────────────
 const FALLBACK_CROP_X = 600;
@@ -20,6 +22,7 @@ const PRE_SETTLE_MS   = 600;
 const POST_SCROLL_MS  = 400;
 const MIN_CHUNK_RATIO = 0.55;
 const EXPORT_BASE_DIR = 'data/vietphase';
+const DEFAULT_SERVER  = 'http://localhost:9999';
 
 const DETECT_EXPR = `(function() {
   const SELS = ["main[data-type='cjk']","#j_chapterContent",".read-content",".chapter-content"];
@@ -45,12 +48,20 @@ const DETECT_EXPR = `(function() {
   };
 })()` ;
 
-// ── Restore novel slug ────────────────────────────────────────────────────────
-chrome.storage.local.get(['novel_slug'], (s) => {
+// ── Restore novel slug + server URL ───────────────────────────────────────────
+chrome.storage.local.get(['novel_slug', 'server_url'], (s) => {
   if (s.novel_slug) novelSlugInput.value = s.novel_slug;
+  serverUrlInput.value = s.server_url || DEFAULT_SERVER;
 });
 novelSlugInput.addEventListener('input', () =>
   chrome.storage.local.set({ novel_slug: novelSlugInput.value.trim() }));
+serverUrlInput.addEventListener('input', () =>
+  chrome.storage.local.set({ server_url: serverUrlInput.value.trim() }));
+
+// Bỏ dấu "/" cuối để khi nối path không sinh "//". Rỗng → mặc định localhost.
+function getServerUrl() {
+  return (serverUrlInput.value.trim() || DEFAULT_SERVER).replace(/\/+$/, '');
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function setStatus(msg)   { statusEl.textContent = msg; }
@@ -261,6 +272,35 @@ btnCapture.addEventListener('click', async () => {
   }
 });
 
+// ── Lớp 0: phân tích chất lượng text (phát hiện font mã hóa / PUA) ─────────────
+// Đếm tỉ lệ ký tự Private Use Area trên ký tự non-whitespace để phát hiện trang
+// render bằng custom font (nhìn đúng nhưng innerText ra ký tự PUA rác). Trả cả
+// metrics để log/debug, không chỉ một boolean. Hàm này dùng cả ở popup (Lớp 2) lẫn
+// bên trong injected func của Lớp 1 — nếu sửa, sửa cả bản copy trong injected func.
+function analyzeText(text) {
+  let total = 0, pua = 0, suspicious = 0, cjk = 0;
+  for (const ch of text || '') {
+    if (/\s/.test(ch)) continue;            // tính trên ký tự non-whitespace
+    total++;
+    const cp = ch.codePointAt(0);
+    const isPua =
+      (cp >= 0xE000 && cp <= 0xF8FF) ||      // BMP PUA
+      (cp >= 0xF0000 && cp <= 0xFFFFD) ||    // Supplementary PUA-A
+      (cp >= 0x100000 && cp <= 0x10FFFD);    // Supplementary PUA-B
+    const isCjk =
+      (cp >= 0x3400 && cp <= 0x9FFF) ||      // CJK + Ext A
+      (cp >= 0x20000 && cp <= 0x323AF);      // CJK Ext B..H
+    if (isPua) pua++;
+    else if (!isCjk && cp > 0xFFFF) suspicious++;
+    if (isCjk) cjk++;
+  }
+  const puaRatio = total ? pua / total : 1;
+  return {
+    total, pua, suspicious, cjk, puaRatio,
+    garbled: total < 20 || puaRatio > 0.03 || (pua > 20 && cjk < pua),
+  };
+}
+
 // ── Thao tác 2: Copy text → tải .txt ──────────────────────────────────────────
 // Đọc thẳng innerText của khối nội dung — bỏ qua được lớp chặn bôi đen/chuột phải
 // của Qidian (không cần extension "Enable Right Click and Copy"). KHÔNG gỡ được
@@ -275,26 +315,174 @@ function cleanExtractedText(text) {
     .trim();
 }
 
-async function extractTextFromPage(tabId) {
+// ── Lớp 1: quét page context (world: MAIN) tìm candidate text sạch ─────────────
+// Chạy ở MAIN world để đọc được biến JS của trang (window.content, JSON nhúng…) mà
+// content script ở isolated world KHÔNG thấy. Lưu ý MAIN world: func bị serialize →
+// MẤT closure, nên analyzeText phải nằm BÊN TRONG injected func; kết quả trả về phải
+// structured-clone được (chỉ string/number/plain object). Page có thể monkey-patch
+// JSON/Array nên bọc try/catch từng bước. Đây là best effort — biến có thể bị dọn
+// sau render hoặc đổi tên → luôn có Lớp 2 + chụp ảnh làm lưới an toàn.
+async function scanPageContext(tabId) {
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: () => {
+        // ── analyzeText: BẢN COPY (MAIN world mất closure, không tham chiếu ngoài) ──
+        function analyzeText(text) {
+          let total = 0, pua = 0, suspicious = 0, cjk = 0;
+          for (const ch of text || '') {
+            if (/\s/.test(ch)) continue;
+            total++;
+            const cp = ch.codePointAt(0);
+            const isPua =
+              (cp >= 0xE000 && cp <= 0xF8FF) ||
+              (cp >= 0xF0000 && cp <= 0xFFFFD) ||
+              (cp >= 0x100000 && cp <= 0x10FFFD);
+            const isCjk =
+              (cp >= 0x3400 && cp <= 0x9FFF) ||
+              (cp >= 0x20000 && cp <= 0x323AF);
+            if (isPua) pua++;
+            else if (!isCjk && cp > 0xFFFF) suspicious++;
+            if (isCjk) cjk++;
+          }
+          const puaRatio = total ? pua / total : 1;
+          return {
+            total, pua, suspicious, cjk, puaRatio,
+            garbled: total < 20 || puaRatio > 0.03 || (pua > 20 && cjk < pua),
+          };
+        }
+
+        // Chấm điểm candidate: ưu tiên text sạch, CJK nhiều, ít cấu trúc JSON/HTML.
+        function scoreCandidate(text) {
+          const m = analyzeText(text);
+          if (m.garbled || m.cjk < 50) return null;
+          // phạt nếu trông giống JSON/HTML metadata hơn là văn xuôi
+          let structural = 0;
+          try {
+            structural = (text.match(/[{}\[\]]|":|https?:\/\/|<\/?[a-z]/gi) || []).length;
+          } catch (_) {}
+          const score = m.cjk - m.pua * 5 - structural * 2;
+          return { score, metrics: m };
+        }
+
+        const candidates = [];
+        function consider(text, source) {
+          if (typeof text !== 'string' || text.length < 200) return;
+          let scored = null;
+          try { scored = scoreCandidate(text); } catch (_) {}
+          if (scored) candidates.push({ text, source, ...scored });
+        }
+
+        // (a) biến window theo whitelist key (KHÔNG stringify toàn bộ window)
+        try {
+          const KEY_RE = /content|chapter|read|initial|state/i;
+          for (const key of Object.keys(window)) {
+            if (!KEY_RE.test(key)) continue;
+            let val;
+            try { val = window[key]; } catch (_) { continue; }
+            if (typeof val === 'string') consider(val, `window.${key}`);
+          }
+        } catch (_) {}
+
+        // (b) JSON nhúng trong <script type="application/json"> / #__NEXT_DATA__
+        try {
+          const blocks = document.querySelectorAll(
+            'script[type="application/json"], #__NEXT_DATA__'
+          );
+          for (const s of blocks) {
+            const raw = s.textContent || '';
+            if (raw.length < 200) continue;
+            let obj = null;
+            try { obj = JSON.parse(raw); } catch (_) { continue; }
+            // recursive walk: CHỈ lấy string dài (> 500), giới hạn độ sâu/số node
+            const stack = [obj];
+            let visited = 0;
+            while (stack.length && visited < 5000) {
+              const cur = stack.pop();
+              visited++;
+              if (typeof cur === 'string') {
+                if (cur.length > 500) consider(cur, `json:${s.id || s.type}`);
+              } else if (cur && typeof cur === 'object') {
+                for (const k of Object.keys(cur)) {
+                  try { stack.push(cur[k]); } catch (_) {}
+                }
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0];
+        return { text: best.text, source: best.source, metrics: best.metrics };
+      },
+    });
+    return result || null;
+  } catch (_) {
+    // MAIN world có thể bị page chặn / executeScript lỗi → coi như không có candidate
+    return null;
+  }
+}
+
+// ── Lớp 2: innerText nhiều selector, chấm điểm TỪNG selector (isolated world) ──
+// Không lấy "chuỗi dài nhất" (dễ dính cả menu/comment/recommendation). Thay vào đó
+// mỗi selector chạy analyzeText, ưu tiên !garbled + CJK cao + độ dài hợp lý.
+async function scanDomSelectors(tabId) {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: () => {
+    func: (analyzeSrc) => {
+      const analyzeText = new Function('return ' + analyzeSrc)();
       const SELECTORS = [
-        "main[data-type='cjk']", "#j_chapterContent",
-        ".read-content", ".chapter-content", "main.content",
+        "main[data-type='cjk']", "#j_chapterContent", "#j_chapterBox",
+        ".read-content", ".read-content.j_readContent", ".chapter-content",
+        "main .content", "main.content",
       ];
-      let best = '';
+      let best = null;
       for (const sel of SELECTORS) {
-        const el = document.querySelector(sel);
-        if (el) {
-          const t = el.innerText.trim();
-          if (t.length > best.length) best = t;
-        }
+        let el;
+        try { el = document.querySelector(sel); } catch (_) { continue; }
+        if (!el) continue;
+        const t = (el.innerText || '').trim();
+        if (!t) continue;
+        const m = analyzeText(t);
+        // điểm: text sạch + nhiều CJK; bản rối vẫn giữ làm phương án cuối nếu chưa có gì
+        const score = (m.garbled ? -1e9 : 0) + m.cjk - m.pua * 5;
+        if (!best || score > best.score) best = { text: t, source: `dom:${sel}`, metrics: m, score };
       }
-      return { title: document.title.replace(/ _.*$/, '').trim(), text: best };
+      if (!best) return { title: document.title, text: '', source: null, metrics: null };
+      return { title: document.title, text: best.text, source: best.source, metrics: best.metrics };
     },
+    args: [analyzeText.toString()],
   });
-  return result || { title: '', text: '' };
+  return result || { title: '', text: '', source: null, metrics: null };
+}
+
+// ── Pipeline tổng: Lớp 1 (MAIN) → Lớp 2 (DOM) → Lớp 3 (quyết định) ────────────
+async function extractTextFromPage(tabId) {
+  const dom = await scanDomSelectors(tabId);
+  const title = (dom.title || '').replace(/ _.*$/, '').trim();
+
+  // Lớp 1: candidate sạch từ page context → ưu tiên (kể cả khi font hiển thị mã hóa)
+  const ctx = await scanPageContext(tabId);
+  if (ctx && ctx.metrics && !ctx.metrics.garbled) {
+    console.log('[extract] page-context', ctx.source, 'puaRatio', ctx.metrics.puaRatio.toFixed(4),
+      'len', ctx.text.length);
+    return { title, text: ctx.text, source: ctx.source, metrics: ctx.metrics, garbled: false };
+  }
+
+  // Lớp 2: DOM innerText
+  if (dom.text && dom.metrics) {
+    console.log('[extract]', dom.source, 'puaRatio', dom.metrics.puaRatio.toFixed(4),
+      'len', dom.text.length, 'garbled', dom.metrics.garbled);
+    return {
+      title, text: dom.text, source: dom.source,
+      metrics: dom.metrics, garbled: dom.metrics.garbled,
+    };
+  }
+
+  // Không có gì
+  return { title, text: '', source: null, metrics: null, garbled: false };
 }
 
 btnCopyTxt.addEventListener('click', async () => {
@@ -308,10 +496,14 @@ btnCopyTxt.addEventListener('click', async () => {
   setProgress(0);
   try {
     setStatus('Đang đọc nội dung từ trang...');
-    const { title, text: rawText } = await extractTextFromPage(tab.id);
+    const { title, text: rawText, garbled } = await extractTextFromPage(tab.id);
     const text = cleanExtractedText(rawText);
+    if (garbled) {
+      setStatus("Trang dùng font mã hóa — hãy bấm '📷 Chụp ảnh' để OCR thay vì lấy text.");
+      return;
+    }
     if (!text || text.length < 50) {
-      setStatus('Không lấy được nội dung (trang chặn hoặc dùng font mã hóa → hãy chụp ảnh).');
+      setStatus('Không lấy được nội dung (trang chặn → thử reload, hoặc hãy chụp ảnh).');
       return;
     }
 
@@ -336,5 +528,74 @@ btnCopyTxt.addEventListener('click', async () => {
     setStatus('Lỗi: ' + err.message);
   } finally {
     btnCopyTxt.disabled = false;
+  }
+});
+
+// ── Thao tác 3: Gửi text thẳng lên server (POST /api/chapters/upload) ──────────
+// Đọc innerText như nút "Copy text", nhưng thay vì tải .txt về Downloads thì gửi
+// multipart lên backend. Backend tự ghi vào input_dir + đăng ký DB; tên file
+// (kèm số chương) được suy từ field name của UploadFile nên phải đặt đúng .txt.
+btnSendServer.addEventListener('click', async () => {
+  const tab = await getActiveTab();
+  if (!tab.url?.includes('qidian.com/chapter/')) {
+    setStatus('Hãy mở một trang chapter trên qidian.com.');
+    return;
+  }
+  const slug = normalizeSlug(novelSlugInput.value);
+  if (slug === 'unknown') {
+    setStatus('Hãy nhập Novel Slug trước khi gửi lên server.');
+    return;
+  }
+
+  btnSendServer.disabled = true;
+  setProgress(0);
+  try {
+    setStatus('Đang đọc nội dung từ trang...');
+    const { title, text: rawText, garbled } = await extractTextFromPage(tab.id);
+    const text = cleanExtractedText(rawText);
+    if (garbled) {
+      setStatus("Trang dùng font mã hóa — hãy bấm '📷 Chụp ảnh' để OCR thay vì gửi text rác.");
+      return;
+    }
+    if (!text || text.length < 50) {
+      setStatus('Không lấy được nội dung (trang chặn → thử reload, hoặc hãy chụp ảnh).');
+      return;
+    }
+
+    const safeTitle = sanitizeFilename(title.replace(/_.*$/, '').replace(/ [-—].*$/, '').trim());
+    const filename  = `${safeTitle}.txt`;
+    const blob      = new Blob([text], { type: 'text/plain;charset=utf-8' });
+
+    const form = new FormData();
+    form.append('novel_slug', slug);
+    form.append('files', blob, filename);
+
+    const server = getServerUrl();
+    setStatus(`Đang gửi lên ${server}...`);
+    const resp = await fetch(`${server}/api/chapters/upload`, { method: 'POST', body: form });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    // Xác minh là JSON trước khi parse — nếu URL trỏ nhầm (vd vào một trang HTML
+    // bất kỳ trả 200) thì báo lỗi rõ ràng thay vì "Unexpected token <".
+    const ctype = resp.headers.get('content-type') || '';
+    if (!ctype.includes('application/json')) {
+      throw new Error('phản hồi không phải JSON — kiểm tra lại Server URL có đúng backend không');
+    }
+    const data = await resp.json();
+
+    const saved  = data.saved?.length || 0;
+    const errors = data.errors || [];
+    previewEl.textContent = text.slice(0, 600) + (text.length > 600 ? '…' : '');
+    previewEl.style.display = 'block';
+    charCountEl.textContent = `${text.length.toLocaleString()} ký tự`;
+    setProgress(100);
+    if (errors.length) {
+      setStatus(`⚠ Server báo lỗi: ${errors.join('; ')}`);
+    } else {
+      setStatus(`✓ Đã gửi lên server (${saved} file): ${filename}`);
+    }
+  } catch (err) {
+    setStatus(`Lỗi gửi server: ${err.message} (server đã chạy ở ${getServerUrl()}?)`);
+  } finally {
+    btnSendServer.disabled = false;
   }
 });

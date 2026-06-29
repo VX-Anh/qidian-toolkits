@@ -1,0 +1,35 @@
+services:
+  vietphase:
+    build: .
+    image: vietphase:latest
+    container_name: vietphase
+    restart: unless-stopped
+
+    # Phơi trực tiếp ra ngoài: truy cập http://IP:9166 (không reverse proxy).
+    # Định dạng "host:container" — host 9166 → container 9999 (uvicorn).
+    ports:
+      - "9166:9999"
+
+    env_file:
+      - .env
+
+    environment:
+      # Đường dẫn dữ liệu BÊN TRONG container — trỏ vào các volume mount bên dưới.
+      # Override giá trị mặc định (Windows) trong config.py.
+      INPUT_DIR: /data/input
+      OUTPUT_DIR: /data/output
+      OCR_IMAGES_DIR: /data/ocr_images
+      VIETPHASE_DIR: /data/vietphase
+      DB_PATH: /data/db/state.db
+      RULES_DIR: rules
+      # PaddleOCR offline phụ thuộc venv + path Windows → không chạy trong container.
+      # Dùng OCR qua Gemini vision thay thế.
+      OCR_DEFAULT_ENGINE: gemini
+      # Service-account JSON cho Vertex AI (mount read-only bên dưới).
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+
+    volumes:
+      # Dữ liệu bền vững: tồn tại qua mỗi lần rebuild/redeploy container.
+      - ./data:/data
+      # Khoá service-account, chỉ đọc. Tạo file ./secrets/gcp-sa.json trên host.
+      - ./secrets/gcp-sa.json:/secrets/gcp-sa.json:ro

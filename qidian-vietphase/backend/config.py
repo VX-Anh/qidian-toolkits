@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # hoặc service-account JSON qua GOOGLE_APPLICATION_CREDENTIALS.
     gcp_project_id: str = Field(default="", validation_alias="GOOGLE_CLOUD_PROJECT")
     gcp_location: str = Field(default="global", validation_alias="GOOGLE_CLOUD_LOCATION")
+    # Đường dẫn service-account JSON. Đọc tường minh trong get_client() để không
+    # phụ thuộc việc biến này có nằm trong os.environ hay không (pydantic nạp .env
+    # vào settings chứ không export ra môi trường process).
+    google_application_credentials: str = Field(
+        default="", validation_alias="GOOGLE_APPLICATION_CREDENTIALS"
+    )
     gemini_model: str = "gemini-3.5-flash"
     gemini_vision_model: str = "gemini-3.5-flash"
 
@@ -33,6 +39,10 @@ class Settings(BaseSettings):
     # Thư mục import sẵn: vietphase/{slug}/{chương}/(output.txt + ảnh .jpg)
     vietphase_dir: Path = Path(r"C:\Users\ASUS\Documents\work\qidian\data\vietphase")
     rules_dir: Path = Path("rules")
+
+    # Vị trí file SQLite. Khi host nên trỏ ra volume bền vững (vd /data/state.db)
+    # để git pull / rebuild container không đụng vào DB.
+    db_path: Path = Path("backend/db/state.db")
 
     concurrency: int = 3
 

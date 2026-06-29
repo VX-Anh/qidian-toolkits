@@ -1,0 +1,26 @@
+# Môi trường ảo / build
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Secrets & config local — KHÔNG bake vào image (truyền qua env/volume khi chạy)
+.env
+.env.local
+*.local
+secrets/
+
+# DB local của dev — runtime dùng volume, không copy file dev vào image
+backend/db/
+
+# Tài liệu / kế hoạch không cần trong image
+*.md
+planning/
+
+# Git
+.git/
+.gitignore

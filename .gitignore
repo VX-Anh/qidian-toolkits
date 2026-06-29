@@ -23,3 +23,8 @@ env/
 .env
 .env.local
 *.local
+
+# Docker runtime data & secrets (vietphase)
+qidian-vietphase/data/
+qidian-vietphase/secrets/*
+!qidian-vietphase/secrets/.gitignore

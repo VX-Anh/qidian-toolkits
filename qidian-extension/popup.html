@@ -64,6 +64,7 @@
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     #btnCapture { background: #7c3aed; color: #fff; }
     #btnCopyTxt { background: #1e3a5f; color: #93c5fd; }
+    #btnSendServer { background: #065f46; color: #6ee7b7; }
     .warning { font-size: 11px; color: #f59e0b; margin-bottom: 10px; display: none; }
     .divider { border: none; border-top: 1px solid #2d2d5e; margin: 12px 0; }
     input[type="text"] {
@@ -86,6 +87,9 @@
   <label>Novel Slug (tên thư mục lưu)</label>
   <input type="text" id="novelSlug" placeholder="vd: thien-dien-quyet" autocomplete="off" />
 
+  <label>Server URL (cho nút Gửi server)</label>
+  <input type="text" id="serverUrl" placeholder="http://localhost:9999" autocomplete="off" />
+
   <hr class="divider" />
 
   <div id="status">Mở một trang chapter để bắt đầu.</div>
@@ -96,6 +100,7 @@
 
   <button class="btn" id="btnCapture">📷 Chụp ảnh → .jpg</button>
   <button class="btn" id="btnCopyTxt">📋 Copy text → .txt</button>
+  <button class="btn" id="btnSendServer">🚀 Gửi text → server</button>
   <script src="popup.js"></script>
 </body>
 </html>
