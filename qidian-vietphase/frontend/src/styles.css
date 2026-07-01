@@ -1514,3 +1514,282 @@ input[type="checkbox"] {
 .term-form .seg button.on { background: var(--bg-app); color: var(--fg-1); }
 .term-form .row { display: flex; gap: 8px; align-items: center; }
 .term-form .row .arrow { color: var(--fg-5); font-size: 13px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   RESPONSIVE — mobile & tablet
+   Mọi rule màn hình hẹp gom ở đây. Desktop (≥1025px) giữ nguyên trạng.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Helper: chỉ hiện trên mobile (hamburger, nút đóng drawer…). Ẩn ở desktop. */
+.mobile-only { display: none; }
+/* .desktop-only ẩn trên mobile — định nghĩa trong khối @media bên dưới. */
+
+/* ── Tablet: ẩn activity rail để main rộng hơn ───────────────────────── */
+@media (max-width: 1024px) {
+  .workbench { grid-template-columns: 1fr; }
+  .workbench .activity { display: none; }
+  .settings-layout { grid-template-columns: 1fr 280px; }
+}
+
+/* ── Mobile (≤768px): 1 cột, bottom tab bar, rail drawer ─────────────── */
+@media (max-width: 768px) {
+  /* Cho phép cuộn dọc — bỏ overflow:hidden toàn cục của desktop. */
+  html, body { overflow: visible; height: auto; }
+
+  .mobile-only { display: inline-flex; }
+  .desktop-only { display: none !important; }
+
+  /* App: 1 cột, chừa chỗ cho bottom-tab bar (≈56px + safe-area). */
+  .app,
+  .app[data-layout="top"] {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: 100dvh;
+  }
+
+  /* ── Left rail → off-canvas drawer ─────────────────────────────────── */
+  .rail {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    width: min(82vw, 300px);
+    z-index: 65;
+    transform: translateX(-100%);
+    transition: transform 0.22s var(--ease);
+    box-shadow: var(--shadow-modal);
+  }
+  .rail.open { transform: translateX(0); }
+  .rail-scrim {
+    position: fixed; inset: 0;
+    background: var(--bg-overlay);
+    z-index: 64;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s var(--ease);
+  }
+  .rail-scrim.open { opacity: 1; pointer-events: auto; }
+  .rail-close {
+    position: absolute;
+    top: 12px; right: 10px;
+    z-index: 1;
+  }
+
+  /* Rail không chiếm cột grid nữa → main là cột duy nhất. */
+  .main { grid-column: 1; }
+
+  /* ── Topbar: gọn lại, hamburger ở trái ─────────────────────────────── */
+  .topbar {
+    padding: 0 12px;
+    gap: 10px;
+  }
+  .hamburger { margin-right: 2px; }
+  .crumb .chip { display: none; }       /* chip thể loại — bỏ cho gọn */
+  .crumb b { max-width: 40vw; }
+
+  /* Search-pill: thu thành nút icon (bỏ chữ + kbd). */
+  .topbar .search-pill {
+    width: auto;
+    padding: 6px;
+  }
+  .topbar .search-pill span:not(.kbd) { display: none; }
+  .topbar .search-pill .kbd { display: none; }
+
+  /* ── Tabs → bottom tab bar cố định đáy ─────────────────────────────── */
+  .tabs {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    height: auto;
+    margin: 0;
+    z-index: 50;
+    background: var(--bg-surface);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    justify-content: space-around;
+  }
+  .tab-btn {
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 0 6px;
+    min-height: 50px;
+    justify-content: center;
+    font-size: 10px;
+  }
+  .tab-btn > span:not(.count) { display: none; }   /* ẩn label, giữ icon */
+  /* Active underline → highlight phía trên thay vì dưới. */
+  .tab-btn.active::after {
+    bottom: auto; top: 0;
+    left: 24%; right: 24%;
+    border-radius: 0 0 1px 1px;
+  }
+  .tab-btn .count {
+    position: absolute;
+    top: 4px; left: 50%;
+    transform: translateX(2px);
+    font-size: 8px;
+    padding: 0 4px;
+    line-height: 1.4;
+  }
+
+  /* Chừa chỗ cho bottom bar ở các vùng cuộn chính. */
+  .work-body,
+  .activity-body,
+  .glossary-layout,
+  .settings-main,
+  .reader-body,
+  .gloss-table-wrap {
+    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0)) !important;
+  }
+
+  /* ── Chapters: toolbar + filters xuống hàng ────────────────────────── */
+  .work-toolbar,
+  .work-filters {
+    flex-wrap: wrap;
+    padding-left: 12px;
+    padding-right: 12px;
+    gap: 8px;
+  }
+  .work-toolbar .spacer,
+  .work-filters .spacer { flex-basis: 100%; height: 0; }
+  .work-toolbar .btn { flex: 1 1 auto; justify-content: center; }
+
+  /* Bảng chương: ẩn cột phụ (checkbox·1, Tên Trung·3, Thuật ngữ·6).
+     Giữ #·2, Tên Việt·4, Trạng thái·5, Review/Mở·7. */
+  .ch-table th:nth-child(1), .ch-table td:nth-child(1),
+  .ch-table th:nth-child(3), .ch-table td:nth-child(3),
+  .ch-table th:nth-child(6), .ch-table td:nth-child(6) {
+    display: none;
+  }
+  .ch-table th, .ch-table td { padding: var(--row-py) 8px; }
+  .ch-table tr.row td:first-child,
+  .ch-table th:nth-child(2) { padding-left: 12px; }
+  .ch-table tr.row td:last-child { padding-right: 12px; }
+
+  /* ── Translation View: 1 pane, head xuống hàng ─────────────────────── */
+  .tv-overlay { height: 100dvh; }
+  .tv-body,
+  .tv-body[data-cols="1"],
+  .tv-body[data-cols="2"],
+  .tv-body[data-cols="3"] {
+    grid-template-columns: 1fr;
+  }
+  /* Chỉ hiện pane đầu tiên đang bật; người dùng chuyển bằng SegControl.
+     (markup render đúng số pane theo `view`, nên 1fr là đủ — nếu view
+     gồm nhiều pane, chúng xếp dọc & cuộn được.) */
+  .tv-pane + .tv-pane { border-left: 0; border-top: 1px solid var(--border); }
+  /* Khi user chọn nhiều pane (Đối chiếu/Cả ba) → xếp dọc, mỗi pane cao tối
+     thiểu để vẫn đọc/cuộn được thay vì bị xẹp bằng nhau. */
+  .tv-body[data-cols="2"] .tv-pane,
+  .tv-body[data-cols="3"] .tv-pane { min-height: 60vh; }
+  .tv-head {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px;
+    row-gap: 6px;
+  }
+  .tv-head > div[style*="margin-left: auto"],
+  .tv-head > div[style*="marginLeft"] { margin-left: 0 !important; flex-wrap: wrap; }
+  .tv-pane-body { padding: 16px; font-size: 15px; }
+  .tv-pane.zh .tv-pane-body,
+  .tv-pane.ocr .tv-pane-body { padding: 16px; }
+  .pane-editor { padding: 16px; }
+  .tv-pane-h {
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+    min-height: 0;
+  }
+  .img-stage { padding: 12px; }
+  .filmstrip { padding: 8px 12px; }
+  .film-thumb { width: 40px; height: 54px; }
+
+  /* Popover thêm thuật ngữ: không tràn mép màn hình. */
+  .term-form { width: min(320px, calc(100vw - 24px)); padding: 12px; }
+  .term-pop .sel-zh { max-width: 120px; }
+
+  /* ── Glossary: cột tab dọc → thanh ngang scroll trên đầu ────────────── */
+  .glossary-layout { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .glossary-tabs {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 6px 8px;
+    gap: 4px;
+  }
+  .glossary-tab {
+    width: auto;
+    flex-shrink: 0;
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: var(--radius);
+    white-space: nowrap;
+  }
+  .glossary-tab.active {
+    border-left: 0;
+    border-bottom-color: var(--accent);
+  }
+  .gloss-toolbar,
+  .gloss-add-row { flex-wrap: wrap; padding-left: 12px; padding-right: 12px; }
+  .gloss-table td.notes { display: none; }
+  .gloss-table th:nth-child(3) { display: none; }
+  .gloss-table th, .gloss-table td { padding: 8px 10px; }
+
+  /* ── Story-Wiki: master-detail (inline-style) → xếp dọc trên mobile ── */
+  .wiki-split { flex-direction: column !important; }
+  .wiki-ent-list {
+    width: 100% !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--border);
+    max-height: 45vh;
+    flex-shrink: 0 !important;
+  }
+  .wiki-ent-detail { padding: 16px !important; }
+
+  /* ── Settings: 1 cột, side panel xuống dưới ────────────────────────── */
+  .settings-layout { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .settings-side {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+  /* Header settings (tiêu đề + toggle + Lưu) xuống hàng, không tràn mép. */
+  .settings-head { flex-wrap: wrap; gap: 10px; }
+  .settings-head > div:last-child { flex-wrap: wrap; }
+  /* Card 2-3 cột (Tên Trung/Việt, Pipeline) → 1 cột cho input đủ rộng. */
+  .settings-card-body[style*="grid-template-columns"],
+  .settings-card-body > div[style*="grid-template-columns"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* ── Reader (output): ẩn sidebar, toolbar wrap, giảm padding ───────── */
+  .reader { grid-template-columns: 1fr; }
+  .reader-sidebar { display: none; }
+  .reader-toolbar {
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    row-gap: 6px;
+  }
+  /* Tên chương giữa toolbar đã có trong <h1> trang → bỏ để không đè nội dung. */
+  .reader-toolbar > span[style*="var(--font-mono)"] { display: none; }
+  .reader-toolbar .btn.sm { flex: 1 1 auto; justify-content: center; }
+  .reader-page { padding: 20px 16px 80px; }
+  .reader-page h1 { font-size: 24px; }
+  .reader-page p { font-size: 16px; line-height: 1.85; }
+  .reader-page p .drop { font-size: 44px; }
+
+  /* ── Modal / cmdk / toast ──────────────────────────────────────────── */
+  .modal { width: min(460px, calc(100vw - 24px)); }
+  .cmdk-scrim { padding-top: 8vh; }
+  .toast {
+    left: 12px; right: 12px;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0));  /* né bottom-bar */
+    justify-content: center;
+  }
+
+  /* Tăng vùng chạm cho nút nhỏ. */
+  .btn.sm { padding: 7px 11px; }
+  .icon-btn { width: 34px; height: 34px; }
+}

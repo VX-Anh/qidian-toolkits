@@ -45,7 +45,7 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
   return (
     <div className="settings-layout">
       <div className="settings-main">
-        <div style={{
+        <div className="settings-head" style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
           marginBottom: 4,
         }}>

@@ -16,10 +16,14 @@ function TranslationView({
 }) {
   const isImage = !!chapter?.ocr_job_id;
 
+  // Mobile: hẹp → mặc định mở 1 pane (đối chiếu nhiều cột không đọc được).
+  const isNarrow = () => typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches;
+  const defaultView = (img) => isNarrow() ? (img ? "ocr+vi" : "translated") : (img ? "all" : "split");
+
   // view modes:
   //   text:  "split" | "source" | "translated"
   //   image: "all" | "img+ocr" | "ocr+vi"
-  const [view, setView] = useStateT(isImage ? "all" : "split");
+  const [view, setView] = useStateT(defaultView(isImage));
   const [showGloss, setShowGloss] = useStateT(true);
   const [tone, setTone] = useStateT("trang trọng");
   const [pageIdx, setPageIdx] = useStateT(0);
@@ -58,7 +62,7 @@ function TranslationView({
   useEffectT(() => {
     if (!chapter) return;
     const fn = encodeURIComponent(chapter.filename);
-    setView(isImage ? "all" : "split");
+    setView(defaultView(isImage));
     setPageIdx(0);
     setSourceText(""); setSegments(null); setSubCount(0);
     setImages([]); setOutputText("");

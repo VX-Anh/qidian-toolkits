@@ -91,6 +91,7 @@ function App() {
   const [checked, setChecked] = useStateA({});
   const [filter, setFilter] = useStateA({ status: "all", query: "" });
   const [cmdkOpen, setCmdkOpen] = useStateA(false);
+  const [railOpen, setRailOpen] = useStateA(false);  // mobile: off-canvas drawer
   const [newOpen, setNewOpen] = useStateA(false);
   const [openChapter, setOpenChapter] = useStateA(null);
   const [toast, setToast] = useStateA({ msg: null, type: "info" });
@@ -690,6 +691,7 @@ function App() {
 
   // ── Handlers ─────────────────────────────────────────────────────────
   function selectNovel(slug) {
+    setRailOpen(false);  // đóng drawer mobile khi chọn truyện
     if (slug === currentSlugRef.current) return;
     setCurrentSlug(slug);
     setChapters([]);
@@ -769,6 +771,8 @@ function App() {
           onNew={() => setNewOpen(true)}
           onOpenCmdk={() => setCmdkOpen(true)}
           serverOk={true}
+          open={railOpen}
+          onClose={() => setRailOpen(false)}
         />
 
         <main className="main">
@@ -781,6 +785,7 @@ function App() {
             onToggleActivity={() => setTweak("showActivity", !tweaks.showActivity)}
             isRunning={isRunning}
             tabCounts={tabCounts}
+            onOpenRail={() => setRailOpen(true)}
           />
 
           {tab === "chapters" && (

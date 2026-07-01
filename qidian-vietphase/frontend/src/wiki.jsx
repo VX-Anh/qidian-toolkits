@@ -175,9 +175,9 @@ function WikiScreen({ entities, novelSlug }) {
           </span>
         </div>
 
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <div className="wiki-split" style={{ flex: 1, display: "flex", minHeight: 0 }}>
           {/* Danh sách thực thể */}
-          <div style={{
+          <div className="wiki-ent-list" style={{
             width: 300, borderRight: "1px solid var(--border)",
             overflowY: "auto", flexShrink: 0,
           }}>
@@ -218,7 +218,7 @@ function WikiScreen({ entities, novelSlug }) {
           </div>
 
           {/* Bảng chi tiết */}
-          <div style={{ flex: 1, overflowY: "auto", padding: 24, minWidth: 0 }}>
+          <div className="wiki-ent-detail" style={{ flex: 1, overflowY: "auto", padding: 24, minWidth: 0 }}>
             {!sel ? (
               <div style={{ color: "var(--fg-4)", fontSize: 13 }}>Chọn một thực thể để xem chi tiết.</div>
             ) : (

@@ -275,10 +275,11 @@ btnCapture.addEventListener('click', async () => {
 // ── Lớp 0: phân tích chất lượng text (phát hiện font mã hóa / PUA) ─────────────
 // Đếm tỉ lệ ký tự Private Use Area trên ký tự non-whitespace để phát hiện trang
 // render bằng custom font (nhìn đúng nhưng innerText ra ký tự PUA rác). Trả cả
-// metrics để log/debug, không chỉ một boolean. Hàm này dùng cả ở popup (Lớp 2) lẫn
-// bên trong injected func của Lớp 1 — nếu sửa, sửa cả bản copy trong injected func.
+// metrics để log/debug, không chỉ một boolean. CÓ 3 BẢN COPY của hàm này (bản này +
+// trong scanPageContext + trong scanDomSelectors) vì injected func chạy ở world khác,
+// mất closure và không thể truyền qua string (CSP chặn eval) — nếu sửa, sửa cả 3.
 function analyzeText(text) {
-  let total = 0, pua = 0, suspicious = 0, cjk = 0;
+  let total = 0, pua = 0, suspicious = 0, cjk = 0, extA = 0;
   for (const ch of text || '') {
     if (/\s/.test(ch)) continue;            // tính trên ký tự non-whitespace
     total++;
@@ -287,16 +288,22 @@ function analyzeText(text) {
       (cp >= 0xE000 && cp <= 0xF8FF) ||      // BMP PUA
       (cp >= 0xF0000 && cp <= 0xFFFFD) ||    // Supplementary PUA-A
       (cp >= 0x100000 && cp <= 0x10FFFD);    // Supplementary PUA-B
+    const isExtA = (cp >= 0x3400 && cp <= 0x4DBF); // CJK Ext A (chữ Hán cực hiếm)
     const isCjk =
       (cp >= 0x3400 && cp <= 0x9FFF) ||      // CJK + Ext A
       (cp >= 0x20000 && cp <= 0x323AF);      // CJK Ext B..H
     if (isPua) pua++;
     else if (!isCjk && cp > 0xFFFF) suspicious++;
+    if (isExtA) extA++;
     if (isCjk) cjk++;
   }
   const puaRatio = total ? pua / total : 1;
+  const extARatio = total ? extA / total : 0;
   return {
-    total, pua, suspicious, cjk, puaRatio,
+    total, pua, suspicious, cjk, extA, puaRatio, extARatio,
+    // Tín hiệu mã hóa CHÍNH là class r-font-encrypt (xử lý ở scanDomSelectors), KHÔNG
+    // dùng extARatio để quyết garbled: chương sạch vẫn có thể có ít chữ Ext A và sẽ bị
+    // báo nhầm. extARatio chỉ giữ để log/debug.
     garbled: total < 20 || puaRatio > 0.03 || (pua > 20 && cjk < pua),
   };
 }
@@ -330,7 +337,7 @@ async function scanPageContext(tabId) {
       func: () => {
         // ── analyzeText: BẢN COPY (MAIN world mất closure, không tham chiếu ngoài) ──
         function analyzeText(text) {
-          let total = 0, pua = 0, suspicious = 0, cjk = 0;
+          let total = 0, pua = 0, suspicious = 0, cjk = 0, extA = 0;
           for (const ch of text || '') {
             if (/\s/.test(ch)) continue;
             total++;
@@ -339,16 +346,19 @@ async function scanPageContext(tabId) {
               (cp >= 0xE000 && cp <= 0xF8FF) ||
               (cp >= 0xF0000 && cp <= 0xFFFFD) ||
               (cp >= 0x100000 && cp <= 0x10FFFD);
+            const isExtA = (cp >= 0x3400 && cp <= 0x4DBF);
             const isCjk =
               (cp >= 0x3400 && cp <= 0x9FFF) ||
               (cp >= 0x20000 && cp <= 0x323AF);
             if (isPua) pua++;
             else if (!isCjk && cp > 0xFFFF) suspicious++;
+            if (isExtA) extA++;
             if (isCjk) cjk++;
           }
           const puaRatio = total ? pua / total : 1;
+          const extARatio = total ? extA / total : 0;
           return {
-            total, pua, suspicious, cjk, puaRatio,
+            total, pua, suspicious, cjk, extA, puaRatio, extARatio,
             garbled: total < 20 || puaRatio > 0.03 || (pua > 20 && cjk < pua),
           };
         }
@@ -431,29 +441,77 @@ async function scanPageContext(tabId) {
 async function scanDomSelectors(tabId) {
   const [{ result }] = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (analyzeSrc) => {
-      const analyzeText = new Function('return ' + analyzeSrc)();
+    // KHÔNG truyền analyzeText qua string + new Function: CSP của trang chặn unsafe-eval
+    // trong injected script → throw → text rỗng → báo nhầm "trang chặn". Nhúng thẳng
+    // bản copy analyzeText vào trong func này (nếu sửa heuristic, sửa cả 3 bản).
+    func: () => {
+      function analyzeText(text) {
+        let total = 0, pua = 0, suspicious = 0, cjk = 0, extA = 0;
+        for (const ch of text || '') {
+          if (/\s/.test(ch)) continue;
+          total++;
+          const cp = ch.codePointAt(0);
+          const isPua =
+            (cp >= 0xE000 && cp <= 0xF8FF) ||
+            (cp >= 0xF0000 && cp <= 0xFFFFD) ||
+            (cp >= 0x100000 && cp <= 0x10FFFD);
+          const isExtA = (cp >= 0x3400 && cp <= 0x4DBF);
+          const isCjk =
+            (cp >= 0x3400 && cp <= 0x9FFF) ||
+            (cp >= 0x20000 && cp <= 0x323AF);
+          if (isPua) pua++;
+          else if (!isCjk && cp > 0xFFFF) suspicious++;
+          if (isExtA) extA++;
+          if (isCjk) cjk++;
+        }
+        const puaRatio = total ? pua / total : 1;
+        const extARatio = total ? extA / total : 0;
+        return {
+          total, pua, suspicious, cjk, extA, puaRatio, extARatio,
+          garbled: total < 20 || puaRatio > 0.03 || (pua > 20 && cjk < pua),
+        };
+      }
+
+      // Layout mới của Qidian: khối chương là <main id="c-<id>" class="content ...">,
+      // id động theo chapter nên dùng prefix selector. `main[id^='c-']` + `main.content`
+      // bắt được layout này; phần còn lại giữ cho layout cũ.
       const SELECTORS = [
-        "main[data-type='cjk']", "#j_chapterContent", "#j_chapterBox",
+        "main[id^='c-']", "main.content", "main[data-type='cjk']",
+        "#j_chapterContent", "#j_chapterBox",
         ".read-content", ".read-content.j_readContent", ".chapter-content",
-        "main .content", "main.content",
+        "main .content",
       ];
+      // Cờ chắc chắn nhất: class r-font-encrypt nghĩa là trang render bằng font mã hóa.
+      // Nếu thấy nó, đánh dấu garbled bất kể analyzeText (font có thể map sang ký tự
+      // CJK "thật nhưng sai", không phải lúc nào cũng PUA).
+      let fontEncrypted = false;
+      try {
+        fontEncrypted = !!document.querySelector(
+          "[class*='r-font-encrypt'], main[class*='encrypt']"
+        );
+      } catch (_) {}
+
       let best = null;
+      const seen = new Set();
       for (const sel of SELECTORS) {
         let el;
         try { el = document.querySelector(sel); } catch (_) { continue; }
-        if (!el) continue;
+        if (!el || seen.has(el)) continue;
+        seen.add(el);
         const t = (el.innerText || '').trim();
         if (!t) continue;
         const m = analyzeText(t);
-        // điểm: text sạch + nhiều CJK; bản rối vẫn giữ làm phương án cuối nếu chưa có gì
+        if (fontEncrypted) m.garbled = true; // ép cờ khi trang dùng font mã hóa
         const score = (m.garbled ? -1e9 : 0) + m.cjk - m.pua * 5;
         if (!best || score > best.score) best = { text: t, source: `dom:${sel}`, metrics: m, score };
       }
-      if (!best) return { title: document.title, text: '', source: null, metrics: null };
-      return { title: document.title, text: best.text, source: best.source, metrics: best.metrics };
+      if (!best) {
+        return { title: document.title, text: '', source: null,
+          metrics: fontEncrypted ? { garbled: true } : null, fontEncrypted };
+      }
+      return { title: document.title, text: best.text, source: best.source,
+        metrics: best.metrics, fontEncrypted };
     },
-    args: [analyzeText.toString()],
   });
   return result || { title: '', text: '', source: null, metrics: null };
 }
@@ -461,23 +519,35 @@ async function scanDomSelectors(tabId) {
 // ── Pipeline tổng: Lớp 1 (MAIN) → Lớp 2 (DOM) → Lớp 3 (quyết định) ────────────
 async function extractTextFromPage(tabId) {
   const dom = await scanDomSelectors(tabId);
-  const title = (dom.title || '').replace(/ _.*$/, '').trim();
+  // Title qidian dạng "第X章 ... _《Truyện》 - 起点中文网" → cắt từ "_" đầu tiên.
+  const title = (dom.title || '').split('_')[0].replace(/ [-—].*$/, '').trim();
 
-  // Lớp 1: candidate sạch từ page context → ưu tiên (kể cả khi font hiển thị mã hóa)
+  // Trang dùng font mã hóa (class r-font-encrypt): KHÔNG lấy text dù layer nào.
+  // Biến page context có thể vẫn là bản đã giải mã, nhưng không có bằng chứng nên
+  // ưu tiên an toàn — báo garbled để người dùng chụp ảnh.
+  if (dom.fontEncrypted) {
+    console.log('[extract] font-encrypted page → buộc garbled');
+    return { title, text: '', source: 'r-font-encrypt', metrics: dom.metrics, garbled: true };
+  }
+
+  // Lớp 1: candidate sạch từ page context → ưu tiên
   const ctx = await scanPageContext(tabId);
   if (ctx && ctx.metrics && !ctx.metrics.garbled) {
-    console.log('[extract] page-context', ctx.source, 'puaRatio', ctx.metrics.puaRatio.toFixed(4),
-      'len', ctx.text.length);
+    console.log('[extract] page-context', ctx.source,
+      'puaRatio', (ctx.metrics.puaRatio ?? 0).toFixed(4),
+      'extARatio', (ctx.metrics.extARatio ?? 0).toFixed(4), 'len', ctx.text.length);
     return { title, text: ctx.text, source: ctx.source, metrics: ctx.metrics, garbled: false };
   }
 
   // Lớp 2: DOM innerText
   if (dom.text && dom.metrics) {
-    console.log('[extract]', dom.source, 'puaRatio', dom.metrics.puaRatio.toFixed(4),
+    console.log('[extract]', dom.source,
+      'puaRatio', (dom.metrics.puaRatio ?? 0).toFixed(4),
+      'extARatio', (dom.metrics.extARatio ?? 0).toFixed(4),
       'len', dom.text.length, 'garbled', dom.metrics.garbled);
     return {
       title, text: dom.text, source: dom.source,
-      metrics: dom.metrics, garbled: dom.metrics.garbled,
+      metrics: dom.metrics, garbled: !!dom.metrics.garbled,
     };
   }
 

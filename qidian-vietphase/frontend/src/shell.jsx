@@ -3,9 +3,14 @@
 const { useState: useStateS, useEffect: useEffectS, useRef: useRefS } = React;
 
 // ── Left Rail ─────────────────────────────────────────────────────────────
-function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk }) {
+function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk, open, onClose }) {
   return (
-    <aside className="rail">
+    <>
+    <div className={`rail-scrim ${open ? "open" : ""}`} onClick={onClose} />
+    <aside className={`rail ${open ? "open" : ""}`}>
+      <button className="icon-btn mobile-only rail-close" onClick={onClose} title="Đóng" aria-label="Đóng danh sách">
+        <Icon name="cancel" size={15} />
+      </button>
       <div className="rail-brand">
         <div className="brand-mark">A</div>
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
@@ -66,6 +71,7 @@ function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk }
         <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-5)" }}>v0.4.0</span>
       </div>
     </aside>
+    </>
   );
 }
 
@@ -81,10 +87,13 @@ const TAB_DEFS = [
 function TopBar({
   novel, active, onTab, onOpenCmdk,
   showActivity, onToggleActivity, isRunning,
-  tabCounts,
+  tabCounts, onOpenRail,
 }) {
   return (
     <div className="topbar">
+      <button className="icon-btn mobile-only hamburger" onClick={onOpenRail} title="Mở danh sách truyện" aria-label="Mở danh sách truyện">
+        <Icon name="list" size={16} />
+      </button>
       <div className="crumb">
         <span style={{ color: "var(--fg-4)" }}>Workspace</span>
         <span className="crumb-sep">/</span>
@@ -112,7 +121,7 @@ function TopBar({
         <span className="kbd">⌘K</span>
       </button>
 
-      <div style={{ display: "flex", gap: 4 }}>
+      <div className="desktop-only" style={{ display: "flex", gap: 4 }}>
         <IconBtn icon="activity" label="Hoạt động agent" active={showActivity} onClick={onToggleActivity}
           title={`${showActivity ? "Ẩn" : "Hiện"} bảng hoạt động${isRunning ? " (đang chạy)" : ""}`} />
       </div>
