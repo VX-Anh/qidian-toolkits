@@ -1522,6 +1522,9 @@ input[type="checkbox"] {
 
 /* Helper: chỉ hiện trên mobile (hamburger, nút đóng drawer…). Ẩn ở desktop. */
 .mobile-only { display: none; }
+/* Scrim của rail-drawer: ẩn mặc định (desktop) — nếu hiện, nó thành grid-item
+   thừa của .app và làm lệch cột. Bật lại trong @media mobile bên dưới. */
+.rail-scrim { display: none; }
 /* .desktop-only ẩn trên mobile — định nghĩa trong khối @media bên dưới. */
 
 /* ── Tablet: ẩn activity rail để main rộng hơn ───────────────────────── */
@@ -1559,6 +1562,7 @@ input[type="checkbox"] {
   }
   .rail.open { transform: translateX(0); }
   .rail-scrim {
+    display: block;
     position: fixed; inset: 0;
     background: var(--bg-overlay);
     z-index: 64;
