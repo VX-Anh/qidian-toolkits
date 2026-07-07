@@ -1,69 +1,35 @@
 """
 OCR toàn bộ ảnh trong một thư mục chapter, gộp text lại và lưu ra file .txt.
 
+Dùng PaddleOCR 3.x với model PP-OCRv6 (PPLCNetV4). Model tự tải về cache của
+paddlex ở lần chạy đầu (không cần tự tải .tar như bản v4 cũ).
+
 Usage:
     uv run run_ocr.py <folder>
-    uv run run_ocr.py <folder> --server          # dùng server model (chính xác hơn)
+    uv run run_ocr.py <folder> --server          # tier medium (chính xác nhất)
     uv run run_ocr.py <folder> --output result.txt
 """
 import sys
 import io
 import os
 import argparse
-import tarfile
-import urllib.request
 from difflib import SequenceMatcher
 from pathlib import Path
 
 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+# line_buffering=True: flush theo từng dòng để backend đọc progress real-time
+# (run_paddle_ocr đọc stdout từng dòng đếm số trang) và log không bị nghẽn buffer.
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
-MODELS_DIR = Path(__file__).parent / ".models"
 
-SERVER_MODELS = {
-    "det": (
-        "ch_PP-OCRv4_det_server_infer",
-        "https://paddleocr.bj.bcebos.com/PP-OCRv4/chinese/ch_PP-OCRv4_det_server_infer.tar",
-    ),
-    "rec": (
-        "ch_PP-OCRv4_rec_server_infer",
-        "https://paddleocr.bj.bcebos.com/PP-OCRv4/chinese/ch_PP-OCRv4_rec_server_infer.tar",
-    ),
-}
-
-
-def _download_with_progress(url: str, dest: Path):
-    print(f"  Download: {url}")
-    tmp = dest.with_suffix(".tar.tmp")
-
-    def reporthook(count, block_size, total):
-        done = count * block_size
-        if total > 0:
-            pct = min(done * 100 // total, 100)
-            mb_done = done / 1024 / 1024
-            mb_total = total / 1024 / 1024
-            print(f"\r  {pct}% ({mb_done:.1f}/{mb_total:.1f} MB)", end="", flush=True)
-
-    urllib.request.urlretrieve(url, tmp, reporthook)
-    print()
-    with tarfile.open(tmp) as tf:
-        tf.extractall(MODELS_DIR)
-    tmp.unlink()
-
-
-def ensure_server_models() -> tuple[str, str]:
-    MODELS_DIR.mkdir(exist_ok=True)
-    paths = {}
-    for key, (folder_name, url) in SERVER_MODELS.items():
-        model_path = MODELS_DIR / folder_name
-        if not model_path.exists():
-            print(f"[server model] Downloading {key} model (~{100 if key=='rec' else 50}MB)...")
-            _download_with_progress(url, MODELS_DIR / f"{folder_name}.tar")
-        paths[key] = str(model_path)
-    return paths["det"], paths["rec"]
+def model_names(server: bool) -> tuple[str, str]:
+    """Chọn tier PP-OCRv6. --server = medium (chính xác nhất, hợp CPU server),
+    mặc định = small (cân bằng tốc độ/độ chính xác)."""
+    tier = "medium" if server else "small"
+    return f"PP-OCRv6_{tier}_det", f"PP-OCRv6_{tier}_rec"
 
 
 def find_head_overlap(prev_lines: list[str], curr_lines: list[str],
@@ -92,20 +58,38 @@ def preprocess(img_path: Path, scale: float = 2.0) -> str:
     from PIL import Image, ImageFilter
     img = Image.open(img_path).convert("RGB")
     w, h = img.size
-    img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
-    img = img.filter(ImageFilter.SHARPEN)
+    if scale and scale != 1.0:
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        img = img.filter(ImageFilter.SHARPEN)
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
     img.save(tmp.name, "PNG")
     return tmp.name
+
+
+def extract_lines(res) -> list[str]:
+    """Lấy danh sách dòng text từ một OCRResult (PaddleOCR 3.x).
+
+    OCRResult là dict-like: res['rec_texts'] là list chuỗi theo thứ tự đọc.
+    Fallback qua res.json['res'] nếu truy cập trực tiếp lỗi."""
+    texts = None
+    try:
+        texts = res["rec_texts"]
+    except Exception:
+        j = getattr(res, "json", None)
+        if isinstance(j, dict):
+            texts = (j.get("res") or j).get("rec_texts")
+    if not texts:
+        return []
+    return [t.strip() for t in texts if t and t.strip()]
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("folder", help="Thư mục chứa ảnh chapter")
     parser.add_argument("--output", "-o", help="Đường dẫn file txt output (mặc định: <folder>/output.txt)")
-    parser.add_argument("--lang", default="ch", help="Ngôn ngữ OCR (default: ch)")
-    parser.add_argument("--scale", type=float, default=2.0, help="Upscale ảnh trước OCR (default: 2.0)")
-    parser.add_argument("--server", action="store_true", help="Dùng server model (chính xác hơn, ~150MB download lần đầu)")
+    parser.add_argument("--lang", default="ch", help="Ngôn ngữ OCR (PP-OCRv6 rec là model đa ngữ 50 thứ tiếng; tham số này chỉ để tương thích CLI cũ)")
+    parser.add_argument("--scale", type=float, default=1.0, help="Upscale ảnh trước OCR (default: 1.0 = tắt; PP-OCRv6 đủ mạnh, upscale chủ yếu làm chậm trên CPU)")
+    parser.add_argument("--server", action="store_true", help="Dùng tier medium PP-OCRv6 (chính xác nhất)")
     args = parser.parse_args()
 
     folder = Path(args.folder)
@@ -122,31 +106,34 @@ def main():
 
     from paddleocr import PaddleOCR
 
-    ocr_kwargs = dict(
-        use_angle_cls=True,
-        lang=args.lang,
-        ocr_version="PP-OCRv4",
-        use_gpu=False,
-        show_log=False,
+    det_name, rec_name = model_names(args.server)
+    print(f"[PP-OCRv6] det={det_name} rec={rec_name} (lần đầu sẽ tự tải model)")
+
+    # Văn bản tiểu thuyết là chữ ngang một cột → tắt các module phụ (orientation /
+    # unwarping / textline orientation) cho nhanh và tránh xoay nhầm.
+    # enable_mkldnn=False: paddlepaddle 3.3 CPU với oneDNN dính bug PIR executor
+    # (ConvertPirAttribute2RuntimeAttribute not support ...ArrayAttribute<DoubleAttribute>)
+    # trên model PP-OCRv6 → tắt MKLDNN để chạy nhánh CPU thường.
+    ocr = PaddleOCR(
+        text_detection_model_name=det_name,
+        text_recognition_model_name=rec_name,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        device="cpu",
+        enable_mkldnn=False,
     )
 
-    if args.server:
-        det_dir, rec_dir = ensure_server_models()
-        print(f"[server model] det={det_dir}")
-        print(f"[server model] rec={rec_dir}")
-        ocr_kwargs["det_model_dir"] = det_dir
-        ocr_kwargs["rec_model_dir"] = rec_dir
-
-    ocr = PaddleOCR(**ocr_kwargs)
-
-    all_lines = []
+    all_lines: list[str] = []
     tmp_files = []
     for img_path in images:
         print(f"OCR: {img_path.name}")
         tmp = preprocess(img_path, scale=args.scale)
         tmp_files.append(tmp)
-        result = ocr.ocr(tmp, cls=True)
-        img_lines = [line[1][0] for line in result[0]] if result and result[0] else []
+
+        img_lines: list[str] = []
+        for res in ocr.predict(tmp):
+            img_lines.extend(extract_lines(res))
 
         if all_lines and img_lines:
             skip = find_head_overlap(all_lines, img_lines)
@@ -157,7 +144,10 @@ def main():
         all_lines.extend(img_lines)
 
     for f in tmp_files:
-        os.unlink(f)
+        try:
+            os.unlink(f)
+        except OSError:
+            pass
 
     text = "\n".join(all_lines)
     output_path.write_text(text, encoding="utf-8")
