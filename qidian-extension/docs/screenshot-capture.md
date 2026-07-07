@@ -1,8 +1,14 @@
 # Cơ chế chụp ảnh chapter của Extension
 
 Tài liệu mô tả cách extension **Qidian Chapter Scraper** chụp ảnh nội dung một
-chapter trên `qidian.com` để gửi đi OCR. Toàn bộ logic chụp nằm trong
+chapter trên `qidian.com`. Toàn bộ logic chụp nằm trong
 [`popup.js`](../popup.js); manifest khai báo quyền tại [`manifest.json`](../manifest.json).
+
+> **Chụp ảnh giờ là đường dự phòng, không phải đường chính.** Luồng chính của
+> extension là **trích xuất text** trực tiếp (nút "Copy text" / "Gửi text →
+> server"). Chỉ khi trang dùng **font mã hóa** (class `r-font-encrypt`, đọc
+> `innerText` ra chữ Hán lộn xộn) thì mới cần chụp ảnh để OCR bằng công cụ ngoài.
+> Chi tiết luồng trích xuất text nằm ở phần cuối tài liệu này.
 
 ## Tổng quan
 
@@ -15,20 +21,24 @@ viewport.
 
 Vì dùng `chrome.debugger`, trình duyệt sẽ hiện **banner vàng cảnh báo** "extension
 đang gỡ lỗi trình duyệt này". Đây là hành vi bình thường (popup có dòng nhắc người
-dùng về banner này).
+dùng về banner này qua phần tử `#warning`).
 
 ### Quyền cần thiết (`manifest.json`)
 
 ```json
-"permissions": ["activeTab", "downloads", "storage", "debugger"],
-"host_permissions": ["https://www.qidian.com/*", "http://localhost:9999/*"]
+"permissions": ["activeTab", "downloads", "storage", "debugger", "scripting"],
+"host_permissions": ["https://www.qidian.com/*", "http://*/*", "https://*/*"]
 ```
 
 - `debugger` — bắt buộc để gọi CDP `Page.captureScreenshot`.
-- `downloads` — lưu ảnh/`.txt` khi dùng nút "Chụp thử".
-- `storage` — nhớ slug truyện và các toggle (auto-push / auto-translate / auto-ocr).
+- `scripting` — bắt buộc cho luồng trích xuất text (`chrome.scripting.executeScript`
+  chạy ở cả world `MAIN` và isolated để đọc nội dung trang).
+- `downloads` — lưu ảnh `.jpg` (nút "Chụp ảnh") và `.txt` (nút "Copy text").
+- `storage` — nhớ **Novel Slug** và **Server URL** người dùng nhập.
 - `activeTab` — đọc tab đang mở.
-- `host_permissions` → `localhost:9999` là backend VietPhase nhận ảnh để OCR.
+- `host_permissions` mở rộng ra `http://*/*` + `https://*/*` để nút "Gửi text →
+  server" POST được lên backend ở **bất kỳ host nào** người dùng cấu hình
+  (mặc định `http://localhost:9999`), không còn cứng ở `localhost:9999`.
 
 ## Luồng chụp — hàm `captureChapter(tabId)`
 
@@ -130,23 +140,61 @@ Hàm trả về mảng các data URL — mỗi phần tử là một ảnh JPEG 
 | `PRE_SETTLE_MS`    | 600     | Chờ sau khi cuộn xuống đáy (ổn định DOM)                  |
 | `POST_SCROLL_MS`   | 400     | Chờ sau khi cuộn về đầu                                   |
 | `MIN_CHUNK_RATIO`  | 0.55    | Ngưỡng tối thiểu để chấp nhận snap điểm cắt theo `<p>`    |
+| `EXPORT_BASE_DIR`  | `data/vietphase` | Thư mục gốc (trong Downloads) để lưu ảnh/text   |
+| `DEFAULT_SERVER`   | `http://localhost:9999` | Server mặc định cho nút "Gửi text → server" |
 
-## Hai chế độ dùng ảnh sau khi chụp
+## Ba nút thao tác trong popup
 
-Cả hai nút đều gọi chung `captureChapter`, chỉ khác cách xử lý mảng ảnh trả về:
+Popup ([`popup.html`](../popup.html)) có 3 nút. **Chỉ nút đầu tiên dùng cơ chế
+chụp ảnh CDP ở trên**; hai nút còn lại đi theo luồng trích xuất text (xem phần
+sau). Cả ba đều chỉ chạy khi tab đang mở URL chứa `qidian.com/chapter/`, và đều
+dùng chung ô **Novel Slug** để đặt tên thư mục lưu.
 
-- **"Chụp thử (xem ảnh)"** — `btnTest`: lưu từng ảnh ra `Downloads/` qua
-  `chrome.downloads.download`, đường dẫn dạng
-  `data/vietphase/<slug>/<số-chương>/<tên>_NN.jpg`. Dùng để kiểm tra mắt thường
-  vùng crop có đúng không.
+- **`📷 Chụp ảnh → .jpg`** — `btnCapture`: gọi `captureChapter(tab.id)` rồi lưu
+  từng ảnh ra `Downloads/` qua `chrome.downloads.download`, đường dẫn dạng
+  `data/vietphase/<slug>/<số-chương>/<tên>_NN.jpg`. Đây là đường **dự phòng** khi
+  trang dùng font mã hóa, không lấy được text sạch. Số chương suy ra từ tiêu đề
+  tab qua `extractChapterNumber`.
 
-- **"Chụp & OCR → .txt"** — `btnCapture` → `runCapture`: gom ảnh vào `FormData`
-  rồi `POST` lên `http://localhost:9999/api/ocr/upload`, sau đó mở `EventSource`
-  tới `/api/ocr/stream/<job_id>` để nhận kết quả OCR (streaming token) hiển thị
-  trong preview. Tùy chọn tự kích hoạt dịch qua `/api/translate/start`.
+- **`📋 Copy text → .txt`** — `btnCopyTxt`: chạy `extractTextFromPage` để đọc
+  `innerText`, làm sạch bằng `cleanExtractedText`, rồi tải file `.txt` về cùng
+  cây thư mục `data/vietphase/<slug>/<số-chương>/<tên>.txt`. Nếu phát hiện font
+  mã hóa (`garbled`) thì báo người dùng chuyển sang nút chụp ảnh.
 
-Ngoài ra, nếu bật toggle **"Tự động OCR khi mở popup trên chapter"**, popup sẽ tự
-gọi `runCapture` ngay khi mở trên một URL `qidian.com/chapter/...`.
+- **`🚀 Gửi text → server`** — `btnSendServer`: cũng trích xuất text như trên
+  nhưng thay vì tải về Downloads thì `POST` multipart (`novel_slug` + file
+  `.txt`) lên `${Server URL}/api/chapters/upload`. Server URL lấy từ ô nhập
+  (mặc định `http://localhost:9999`, bỏ dấu `/` cuối). Bắt buộc nhập Novel Slug
+  trước khi gửi; phản hồi phải là JSON, nếu không sẽ báo lỗi cấu hình URL.
+
+> Extension **không còn** luồng OCR/EventSource/auto-translate như bản cũ. OCR
+> ảnh chụp (nếu cần) do công cụ/back-end bên ngoài đảm nhận, không nằm trong
+> extension.
+
+## Luồng trích xuất text (đường chính)
+
+Hai nút "Copy text" và "Gửi text → server" dùng chung `extractTextFromPage(tabId)`,
+một pipeline nhiều lớp để lấy text **sạch** và phát hiện trang mã hóa font:
+
+1. **Lớp 2 — quét DOM (`scanDomSelectors`, isolated world).** Thử nhiều selector
+   (kể cả layout mới `main[id^='c-']`, `main.content` lẫn layout cũ
+   `#j_chapterContent`, `.read-content`…), chấm điểm từng selector bằng
+   `analyzeText` (ưu tiên nhiều ký tự CJK, ít ký tự PUA). Đồng thời kiểm tra class
+   `r-font-encrypt`/`*encrypt*` để bắt trang **font mã hóa** → ép cờ `garbled`.
+
+2. **Lớp 1 — quét page context (`scanPageContext`, world `MAIN`).** Đọc biến JS
+   của trang (`window.*` theo whitelist key, JSON nhúng trong
+   `<script type="application/json">`/`#__NEXT_DATA__`) để tìm bản text sạch mà
+   isolated world không thấy. Nếu trang mã hóa font thì **bỏ qua** lớp này.
+
+3. **Lớp 3 — quyết định.** Nếu trang mã hóa font → trả `garbled: true` (buộc chụp
+   ảnh). Nếu không, ưu tiên candidate sạch từ Lớp 1, sau đó tới Lớp 2.
+
+`analyzeText` đếm tỉ lệ ký tự **Private Use Area (PUA)** trên tổng ký tự
+non-whitespace để phát hiện font tùy biến (nhìn đúng nhưng `innerText` ra ký tự
+rác). Hàm này có **3 bản copy** (bản gốc + trong `scanPageContext` + trong
+`scanDomSelectors`) vì injected function chạy ở world khác nên mất closure và
+không truyền qua string được (CSP chặn `eval`). **Sửa heuristic thì phải sửa cả 3.**
 
 ## Tóm tắt vì sao dùng CDP thay vì API thông thường
 
