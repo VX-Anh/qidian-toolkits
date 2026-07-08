@@ -75,6 +75,8 @@ class Orchestrator:
                 await self.state.upsert_chapter(path.name, self.novel_slug, num, zh_title)
 
             await self._emit("orchestrator", "queued", count=len(files))
+            print(f"[dịch] ▶ BẮT ĐẦU dịch '{profile.vi_name}' — {len(files)} chương "
+                  f"(song song {settings.concurrency})", flush=True)
 
             # Dịch song song với semaphore
             sem = asyncio.Semaphore(settings.concurrency)
@@ -154,6 +156,7 @@ class Orchestrator:
                 await self._emit("orchestrator", "review_summary", reviews=reviews)
 
             await self._emit("orchestrator", "done", novel=self.novel_slug)
+            print(f"[dịch] ■ HOÀN TẤT job '{profile.vi_name}' ({len(files)} chương)", flush=True)
 
         except Exception as exc:
             await self._emit("orchestrator", "error", msg=f"Lỗi nghiêm trọng: {exc}")
@@ -170,10 +173,12 @@ class Orchestrator:
                 and chapter_info["status"] == ChapterStatus.DONE
             ):
                 await self._emit("translator", "skip", file=filename, reason="already done")
+                print(f"[dịch]   ⏭ bỏ qua (đã dịch): {filename}", flush=True)
                 return
 
             await self.state.set_status(filename, ChapterStatus.IN_PROGRESS)
             await self._emit("translator", "start", file=filename)
+            print(f"[dịch]   → bắt đầu: {filename}", flush=True)
 
             try:
                 content = path.read_text(encoding="utf-8")
@@ -215,9 +220,16 @@ class Orchestrator:
                         await self._emit("translator", "error", file=filename,
                                          error="Không lưu được bản dịch (agent không gọi save_chapter)")
 
+                final = self.state.get_chapter(filename)
+                if final and final["status"] == ChapterStatus.DONE:
+                    print(f"[dịch]   ✓ xong: {filename}", flush=True)
+                else:
+                    print(f"[dịch]   ✗ thất bại: {filename}", flush=True)
+
             except Exception as exc:
                 await self.state.set_status(filename, ChapterStatus.FAILED, error=str(exc))
                 await self._emit("translator", "error", file=filename, error=str(exc))
+                print(f"[dịch]   ✗ lỗi: {filename} — {exc}", flush=True)
 
     def _collect_files(self) -> list[Path]:
         all_files = sorted(

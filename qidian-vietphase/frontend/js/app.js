@@ -112,7 +112,7 @@ async function checkHealth() {
 }
 
 checkHealth();
-setInterval(checkHealth, 10_000);
+setInterval(checkHealth, 30_000);
 
 // ── Log auto-collapse ─────────────────────────────────────────────────────────
 let _logCollapseTimer = null;
@@ -200,7 +200,9 @@ let _ocrActiveStream = null;
 
 function startOcrPolling() {
   if (_ocrPollTimer) return;
-  _ocrPollTimer = setInterval(checkOcrJobs, 2000);
+  // 5s là đủ để banner OCR hiện kịp khi job khởi từ extension; 2s trước đây spam
+  // GET /api/ocr/jobs liên tục vào log server dù đang rảnh.
+  _ocrPollTimer = setInterval(checkOcrJobs, 5000);
 }
 
 function stopOcrPolling() {
@@ -210,6 +212,9 @@ function stopOcrPolling() {
 
 async function checkOcrJobs() {
   if (!state.currentNovel) return;
+  // Đang stream 1 job qua SSE → không cần poll (SSE tự lo tiến trình + kết thúc).
+  // Poll chỉ để PHÁT HIỆN job mới (vd khởi từ extension) khi đang rảnh.
+  if (_ocrActiveStream) return;
   try {
     const jobs = await api.get(`/api/ocr/jobs?novel_slug=${state.currentNovel}`);
     if (jobs.length > 0) {

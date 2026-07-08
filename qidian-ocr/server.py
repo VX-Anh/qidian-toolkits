@@ -85,27 +85,40 @@ def health():
 
 
 def _run_dir(img_dir: Path, scale: float) -> list[str]:
-    """OCR toàn bộ ảnh trong thư mục, gộp dòng + khử overlap. Chạy trong worker thread."""
+    """OCR toàn bộ ảnh trong thư mục, gộp dòng + khử overlap. Chạy trong worker thread.
+
+    Log per-ảnh ra stdout (xem qua `docker logs qidian-ocr`): số dòng nhận diện, số
+    dòng overlap bị bỏ, và tổng dòng tích lũy.
+    """
     images = sorted(p for p in img_dir.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+    total = len(images)
+    print(f"[ocr] {img_dir}: {total} ảnh (scale={scale})", flush=True)
     all_lines: list[str] = []
     tmps: list[str] = []
     try:
-        for p in images:
+        for idx, p in enumerate(images, 1):
+            print(f"[ocr] [{idx}/{total}] {p.name}", flush=True)
             tmp = preprocess(p, scale=scale)
             tmps.append(tmp)
             img_lines: list[str] = []
             for res in _ocr.predict(tmp):
                 img_lines.extend(extract_lines(res))
+            print(f"[ocr]   -> nhận diện {len(img_lines)} dòng", flush=True)
             # ảnh chụp có vùng chồng lấn → bỏ các dòng đầu trùng với đuôi ảnh trước.
             if all_lines and img_lines:
-                img_lines = img_lines[find_head_overlap(all_lines, img_lines):]
+                skip = find_head_overlap(all_lines, img_lines)
+                if skip:
+                    print(f"[ocr]   -> bỏ {skip} dòng trùng đầu (overlap)", flush=True)
+                img_lines = img_lines[skip:]
             all_lines.extend(img_lines)
+            print(f"[ocr]   -> +{len(img_lines)} dòng (tổng {len(all_lines)})", flush=True)
     finally:
         for t in tmps:
             try:
                 os.unlink(t)
             except OSError:
                 pass
+    print(f"[ocr] hoàn tất: {len(all_lines)} dòng", flush=True)
     return all_lines
 
 

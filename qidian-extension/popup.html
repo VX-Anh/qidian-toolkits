@@ -63,6 +63,7 @@
     .btn:hover { opacity: 0.85; }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     #btnCapture { background: #7c3aed; color: #fff; }
+    #btnSendImages { background: #5b21b6; color: #ddd6fe; }
     #btnCopyTxt { background: #1e3a5f; color: #93c5fd; }
     #btnSendServer { background: #065f46; color: #6ee7b7; }
     .warning { font-size: 11px; color: #f59e0b; margin-bottom: 10px; display: none; }
@@ -82,7 +83,7 @@
 </head>
 <body>
   <h2>Qidian Chapter Scraper</h2>
-  <p style="font-size:11px;color:#6b7280;margin-bottom:12px">Lưu chương về Downloads: ảnh (.jpg) hoặc văn bản (.txt)</p>
+  <p style="font-size:11px;color:#6b7280;margin-bottom:12px">Lưu về Downloads (.jpg/.txt) hoặc gửi thẳng lên server (ảnh→OCR / text)</p>
 
   <label>Novel Slug (tên thư mục lưu)</label>
   <input type="text" id="novelSlug" placeholder="vd: thien-dien-quyet" autocomplete="off" />
@@ -99,6 +100,7 @@
   <div id="charCount"></div>
 
   <button class="btn" id="btnCapture">📷 Chụp ảnh → .jpg</button>
+  <button class="btn" id="btnSendImages">🖼️ Chụp ảnh → OCR server</button>
   <button class="btn" id="btnCopyTxt">📋 Copy text → .txt</button>
   <button class="btn" id="btnSendServer">🚀 Gửi text → server</button>
   <script src="popup.js"></script>

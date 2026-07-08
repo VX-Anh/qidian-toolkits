@@ -1,7 +1,8 @@
 // ── DOM refs ──────────────────────────────────────────────────────────────────
-const btnCapture     = document.getElementById('btnCapture');   // chụp ảnh → .jpg
-const btnCopyTxt     = document.getElementById('btnCopyTxt');    // copy text → .txt
-const btnSendServer  = document.getElementById('btnSendServer'); // gửi text → server
+const btnCapture     = document.getElementById('btnCapture');    // chụp ảnh → .jpg
+const btnSendImages  = document.getElementById('btnSendImages');  // chụp ảnh → OCR server
+const btnCopyTxt     = document.getElementById('btnCopyTxt');     // copy text → .txt
+const btnSendServer  = document.getElementById('btnSendServer');  // gửi text → server
 const statusEl       = document.getElementById('status');
 const progressBar    = document.getElementById('progressBar');
 const previewEl      = document.getElementById('preview');
@@ -268,6 +269,102 @@ btnCapture.addEventListener('click', async () => {
     setStatus('Lỗi: ' + err.message);
   } finally {
     btnCapture.disabled = false;
+    warningEl.style.display = 'none';
+  }
+});
+
+// ── Thao tác 1b: Chụp ảnh → gửi thẳng lên server OCR (POST /api/ocr/upload) ────
+// Không tải .jpg về Downloads mà POST multipart các ảnh lên backend; backend chạy
+// OCR (PaddleOCR mặc định) rồi phát tiến trình qua SSE /api/ocr/stream/{job_id}.
+function streamOcr(server, jobId) {
+  return new Promise((resolve) => {
+    const es = new EventSource(`${server}/api/ocr/stream/${jobId}`);
+    let tokenText = '';
+    es.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (_) { return; }
+      switch (msg.type) {
+        case 'ocr_progress':
+          setStatus(msg.msg || 'Đang OCR…');
+          if (msg.total) setProgress(Math.round((msg.page / msg.total) * 100));
+          break;
+        case 'ocr_token': // chỉ engine gemini stream token; paddle không có
+          tokenText += msg.text || '';
+          previewEl.textContent = tokenText.slice(-600);
+          previewEl.style.display = 'block';
+          break;
+        case 'ocr_done':
+          setProgress(100);
+          previewEl.textContent = (msg.preview || '').slice(0, 600);
+          previewEl.style.display = 'block';
+          charCountEl.textContent = `${(msg.char_count || 0).toLocaleString()} ký tự`;
+          setStatus(`✓ OCR xong: ${msg.filename}`);
+          es.close();
+          resolve();
+          break;
+        case 'ocr_error':
+          setStatus(`⚠ OCR lỗi: ${msg.msg}`);
+          es.close();
+          resolve();
+          break;
+      }
+    };
+    // Stream đóng bằng sentinel None ở server → EventSource coi là lỗi kết nối; nếu
+    // chưa nhận ocr_done/ocr_error thì cũng dừng để không treo nút.
+    es.onerror = () => { es.close(); resolve(); };
+  });
+}
+
+btnSendImages.addEventListener('click', async () => {
+  const tab = await getActiveTab();
+  if (!tab.url?.includes('qidian.com/chapter/')) {
+    setStatus('Hãy mở một trang chapter trên qidian.com.');
+    return;
+  }
+  const slug = normalizeSlug(novelSlugInput.value);
+  if (slug === 'unknown') {
+    setStatus('Hãy nhập Novel Slug trước khi gửi ảnh lên server.');
+    return;
+  }
+
+  btnSendImages.disabled = true;
+  warningEl.style.display = 'block';
+  previewEl.style.display = 'none';
+  setProgress(0);
+
+  try {
+    const screenshots = await captureChapter(tab.id);
+    if (!screenshots.length) {
+      setStatus('Không tìm thấy vùng nội dung. Thử reload trang rồi chụp lại.');
+      return;
+    }
+    warningEl.style.display = 'none';
+
+    const form = new FormData();
+    form.append('novel_slug', slug);
+    // Title thô của tab (dạng "第675章 天演 - ..._起点中文网") để backend tự tách
+    // tên chương chuẩn; engine để trống → server dùng OCR_DEFAULT_ENGINE (paddle).
+    form.append('chapter_title', tab.title || '');
+    for (let i = 0; i < screenshots.length; i++) {
+      const blob = await (await fetch(screenshots[i])).blob();
+      form.append('images', blob, `shot_${String(i + 1).padStart(2, '0')}.jpg`);
+    }
+
+    const server = getServerUrl();
+    setStatus(`Đang gửi ${screenshots.length} ảnh lên ${server} để OCR...`);
+    const resp = await fetch(`${server}/api/ocr/upload`, { method: 'POST', body: form });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    const ctype = resp.headers.get('content-type') || '';
+    if (!ctype.includes('application/json')) {
+      throw new Error('phản hồi không phải JSON — kiểm tra lại Server URL có đúng backend không');
+    }
+    const { job_id, engine } = await resp.json();
+    setStatus(`OCR (${engine}) đang chạy trên server…`);
+    await streamOcr(server, job_id);
+  } catch (err) {
+    setStatus(`Lỗi gửi ảnh OCR: ${err.message} (server đã chạy ở ${getServerUrl()}?)`);
+  } finally {
+    btnSendImages.disabled = false;
     warningEl.style.display = 'none';
   }
 });

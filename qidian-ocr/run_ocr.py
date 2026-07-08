@@ -126,22 +126,28 @@ def main():
 
     all_lines: list[str] = []
     tmp_files = []
-    for img_path in images:
-        print(f"OCR: {img_path.name}")
+    total = len(images)
+    for idx, img_path in enumerate(images, 1):
+        # Dòng "OCR: " được backend (run_paddle_ocr) đếm để hiện tiến trình → giữ prefix.
+        print(f"OCR: [{idx}/{total}] {img_path.name}")
         tmp = preprocess(img_path, scale=args.scale)
         tmp_files.append(tmp)
+        if args.scale and args.scale != 1.0:
+            print(f"  -> tiền xử lý: upscale x{args.scale} + sharpen")
 
         img_lines: list[str] = []
         for res in ocr.predict(tmp):
             img_lines.extend(extract_lines(res))
+        print(f"  -> nhận diện {len(img_lines)} dòng")
 
         if all_lines and img_lines:
             skip = find_head_overlap(all_lines, img_lines)
             if skip:
-                print(f"  -> bỏ {skip} dòng overlap")
+                print(f"  -> bỏ {skip} dòng trùng đầu (overlap với ảnh trước)")
             img_lines = img_lines[skip:]
 
         all_lines.extend(img_lines)
+        print(f"  -> +{len(img_lines)} dòng (tổng {len(all_lines)})")
 
     for f in tmp_files:
         try:
