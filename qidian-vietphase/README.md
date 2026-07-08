@@ -32,9 +32,7 @@ File chương đặt tên theo dạng `第675章 天演.txt` (số chương nằ
 ## Chạy server
 
 ```bash
-uv run uvicorn backend.main:app --reload \
-  --reload-include "*.html" --reload-include "*.css" --reload-include "*.js" \
-  --port 9999
+uv run uvicorn backend.main:app --reload --reload-include "*.html" --reload-include "*.css" --reload-include "*.js" --port 9999
 ```
 
 Mở giao diện: http://127.0.0.1:9999
@@ -87,18 +85,50 @@ mkdir -p secrets
 cp /đường/dẫn/key.json secrets/gcp-sa.json   # compose mount read-only sẵn
 ```
 
-**3. Build & chạy**
+**3. OCR offline (PaddleOCR) — sidecar GPU**
+
+`docker-compose.yml` chạy thêm service `ocr` (PaddleOCR PP-OCRv6) để OCR **miễn
+phí offline**, mặc định `OCR_DEFAULT_ENGINE=paddle`. Lưu ý khi deploy:
+
+- **Cần cả repo `qidian-toolkits`** trên server, không chỉ `qidian-vietphase/` —
+  service `ocr` build từ sibling `../qidian-ocr` (build context).
+- **GPU (khuyến nghị):** host phải cài **nvidia-container-toolkit**. Kiểm tra:
+  ```bash
+  nvidia-smi                                   # đọc "CUDA Version" + tên GPU
+  docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi
+  ```
+  Image OCR mặc định build cho **CUDA 12.6** (`cu126`). Nếu `nvidia-smi` báo CUDA
+  khác, sửa tag base image + URL index trong `qidian-ocr/Dockerfile` cho khớp
+  (`cu129`/`cu118`…).
+- Nếu Docker Compose **không nhận** `gpus: all`, thay bằng block:
+  ```yaml
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: all
+                capabilities: [gpu]
+  ```
+- **Không có GPU?** Bỏ dòng `gpus: all` trong compose và đặt `PADDLE_DEVICE=cpu`
+  cho service `ocr`, đổi base image `qidian-ocr/Dockerfile` sang `python:3.11-slim`
+  + wheel `paddlepaddle` (CPU). Chậm hơn nhưng vẫn chạy.
+- Lần đầu, service `ocr` **tải model PP-OCRv6** về volume `paddlex-models` (cần
+  mạng ra ngoài một lần); các lần sau dùng lại cache.
+
+**4. Build & chạy**
 
 ```bash
 docker compose up -d --build
-docker compose logs -f          # xem log
+docker compose logs -f ocr        # theo dõi lần đầu tải model PP-OCRv6
+docker compose exec ocr curl -s localhost:8000/health   # {"device":"gpu","ready":true}
 ```
 
 Server phơi trực tiếp ra ngoài tại `http://IP-VPS:9166` (map sang cổng 9999
 trong container). Nhớ mở cổng 9166 trên firewall của VPS (xem cảnh báo bảo mật
 bên dưới).
 
-**4. Backup**
+**5. Backup**
 
 Dữ liệu thật nằm ở `./data` (gồm `db/state.db`, `input`, `output`, `vietphase`).
 Backup nhất quán SQLite kể cả khi đang chạy:
@@ -114,9 +144,10 @@ docker compose exec vietphase \
 > worker hoặc nhiều người ghi đồng thời. Chỉ chạy **một** worker uvicorn:
 > connection + lock là per-process.
 >
-> **OCR offline (PaddleOCR) KHÔNG chạy trong container** — nó phụ thuộc venv +
-> model cài riêng trên máy Windows (`qidian-ocr/`). Trong container hãy dùng OCR
-> engine Gemini (`OCR_DEFAULT_ENGINE=gemini`) nếu cần.
+> **OCR offline (PaddleOCR)** giờ chạy trong container qua sidecar service `ocr`
+> (xem bước 3). Mặc định `OCR_DEFAULT_ENGINE=paddle` (miễn phí); đổi sang
+> `gemini` nếu muốn OCR bằng Gemini vision. Dev trên Windows thì để
+> `OCR_SERVICE_URL` trống → paddle chạy qua subprocess venv `qidian-ocr/`.
 
 ### Gửi chương từ extension lên server đã host
 

@@ -6,6 +6,11 @@ dependencies = [
     "paddlepaddle>=3.3.0",
     "paddleocr>=3.7.0",
     "setuptools>=82.0.1",
+    # HTTP service (server.py). Dev Windows dùng bản này chạy thử service local;
+    # trên server, Dockerfile GPU tự cài fastapi/uvicorn nên không phụ thuộc lock này.
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "anyio>=4.0",
 ]
 
 [tool.uv.sources]

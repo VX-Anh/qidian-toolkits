@@ -2,6 +2,7 @@ import asyncio
 import re
 from pathlib import Path
 
+import httpx
 from google import genai
 from google.genai import types
 
@@ -88,6 +89,128 @@ async def run_ocr(
         await event_queue.close()
 
 
+async def _finalize_ocr(
+    job_id, novel_slug, chapter_title_hint, full_text, state, event_queue, settings, out_filename
+):
+    """Ghi text ra input_dir, đăng ký chapter vào DB, phát ocr_done. Dùng chung cho
+    cả hai nhánh (HTTP / subprocess). full_text đã strip. Trả True nếu có text."""
+    if not full_text:
+        await event_queue.put({"type": "ocr_error", "msg": "PaddleOCR trả về rỗng"})
+        return False
+
+    filename = out_filename or _parse_filename(chapter_title_hint, full_text)
+    settings.input_dir.mkdir(parents=True, exist_ok=True)
+    (settings.input_dir / filename).write_text(full_text, encoding="utf-8")
+
+    num, zh_title = parse_chapter_filename(filename)
+    await state.upsert_chapter(filename, novel_slug, num, zh_title, ocr_job_id=job_id)
+
+    await event_queue.put({
+        "type": "ocr_done",
+        "filename": filename,
+        "char_count": len(full_text),
+        "preview": full_text[:400],
+    })
+    return True
+
+
+async def _run_paddle_ocr_http(
+    job_id, novel_slug, chapter_title_hint, image_paths, state, event_queue, settings, out_filename
+):
+    """Gọi sidecar OCR qua HTTP (deploy Docker). Ảnh nằm trên volume /data dùng chung
+    nên chỉ truyền đường dẫn thư mục; service ghi output.txt cạnh ảnh và trả text về."""
+    img_dir = image_paths[0].parent
+    output_path = img_dir / "output.txt"
+    total = len(image_paths)
+    await event_queue.put({
+        "type": "ocr_progress", "step": "paddle", "page": 0, "total": total,
+        "msg": f"Đang OCR offline (PaddleOCR, {total} ảnh)…",
+    })
+
+    url = settings.ocr_service_url.rstrip("/") + "/ocr"
+    payload = {"img_dir": str(img_dir), "output_path": str(output_path)}
+    # Chương chỉ vài ảnh nhưng lần đầu service tải model có thể lâu → timeout rộng.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+    full_text = (data.get("text") or "").strip()
+    # Phòng khi response không kèm text (vd service bản cũ) → đọc lại file trên volume.
+    if not full_text and output_path.exists():
+        full_text = output_path.read_text(encoding="utf-8").strip()
+
+    await _finalize_ocr(job_id, novel_slug, chapter_title_hint, full_text,
+                        state, event_queue, settings, out_filename)
+
+
+async def _run_paddle_ocr_subprocess(
+    job_id, novel_slug, chapter_title_hint, image_paths, state, event_queue, settings, out_filename
+):
+    """OCR offline bằng cách spawn qidian-ocr/run_ocr.py trong venv riêng (dev Windows).
+
+    Phát ocr_progress theo từng dòng stdout của subprocess (mỗi ảnh, số dòng overlap
+    bị bỏ), rồi ocr_done khi xong."""
+    img_dir = image_paths[0].parent
+    output_path = img_dir / "output.txt"
+
+    py = str(settings.paddle_python)
+    script = str(settings.paddle_ocr_script)
+    if not Path(py).exists():
+        await event_queue.put({"type": "ocr_error", "msg": f"Không tìm thấy Python PaddleOCR: {py}"})
+        return
+    if not Path(script).exists():
+        await event_queue.put({"type": "ocr_error", "msg": f"Không tìm thấy run_ocr.py: {script}"})
+        return
+
+    cmd = [py, script, str(img_dir), "--output", str(output_path)]
+    if settings.paddle_use_server:
+        cmd.append("--server")
+
+    total = len(image_paths)
+    await event_queue.put({
+        "type": "ocr_progress", "step": "paddle", "page": 0, "total": total,
+        "msg": f"Khởi tạo PaddleOCR ({'server' if settings.paddle_use_server else 'mobile'} model)…",
+    })
+
+    # NOTE: dùng subprocess.Popen trong thread thay vì asyncio.create_subprocess_exec —
+    # trên Windows event loop của uvicorn (Selector) không hỗ trợ subprocess async
+    # (NotImplementedError). Đẩy event về loop chính qua run_coroutine_threadsafe.
+    import subprocess
+    loop = asyncio.get_running_loop()
+
+    def _run_and_stream() -> int:
+        proc = subprocess.Popen(
+            cmd, cwd=str(settings.paddle_ocr_cwd),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+        )
+        page = 0
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            if line.startswith("OCR: "):
+                page += 1
+            evt = {"type": "ocr_progress", "step": "paddle", "page": page, "total": total, "msg": line}
+            asyncio.run_coroutine_threadsafe(event_queue.put(evt), loop)
+        proc.stdout.close()
+        return proc.wait()
+
+    returncode = await asyncio.to_thread(_run_and_stream)
+    if returncode != 0:
+        await event_queue.put({"type": "ocr_error", "msg": f"PaddleOCR thất bại (exit {returncode})"})
+        return
+
+    if not output_path.exists():
+        await event_queue.put({"type": "ocr_error", "msg": "PaddleOCR không tạo output.txt"})
+        return
+
+    full_text = output_path.read_text(encoding="utf-8").strip()
+    await _finalize_ocr(job_id, novel_slug, chapter_title_hint, full_text,
+                        state, event_queue, settings, out_filename)
+
+
 async def run_paddle_ocr(
     job_id: str,
     novel_slug: str,
@@ -99,86 +222,25 @@ async def run_paddle_ocr(
     settings,
     out_filename: str | None = None,
 ):
-    """OCR offline bằng PaddleOCR (chạy qidian-ocr/run_ocr.py trong venv riêng).
-
-    Không stream từng ký tự như LLM; phát ocr_progress theo từng dòng stdout
-    của subprocess (mỗi ảnh, số dòng overlap bị bỏ), rồi ocr_done khi xong.
+    """OCR offline bằng PaddleOCR. Chọn nhánh theo settings.ocr_service_url:
+    - có URL  → gọi sidecar OCR qua HTTP (deploy Docker/server)
+    - rỗng    → spawn subprocess venv qidian-ocr (dev Windows)
     """
     try:
         if not image_paths:
             await event_queue.put({"type": "ocr_error", "msg": "Không có ảnh"})
             return
 
-        img_dir = image_paths[0].parent
-        output_path = img_dir / "output.txt"
-
-        py = str(settings.paddle_python)
-        script = str(settings.paddle_ocr_script)
-        if not Path(py).exists():
-            await event_queue.put({"type": "ocr_error", "msg": f"Không tìm thấy Python PaddleOCR: {py}"})
-            return
-        if not Path(script).exists():
-            await event_queue.put({"type": "ocr_error", "msg": f"Không tìm thấy run_ocr.py: {script}"})
-            return
-
-        cmd = [py, script, str(img_dir), "--output", str(output_path)]
-        if settings.paddle_use_server:
-            cmd.append("--server")
-
-        total = len(image_paths)
-        await event_queue.put({
-            "type": "ocr_progress", "step": "paddle", "page": 0, "total": total,
-            "msg": f"Khởi tạo PaddleOCR ({'server' if settings.paddle_use_server else 'mobile'} model)…",
-        })
-
-        # NOTE: dùng subprocess.Popen trong thread thay vì asyncio.create_subprocess_exec —
-        # trên Windows event loop của uvicorn (Selector) không hỗ trợ subprocess async
-        # (NotImplementedError). Đẩy event về loop chính qua run_coroutine_threadsafe.
-        import subprocess
-        loop = asyncio.get_running_loop()
-
-        def _run_and_stream() -> int:
-            proc = subprocess.Popen(
-                cmd, cwd=str(settings.paddle_ocr_cwd),
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace", bufsize=1,
+        if getattr(settings, "ocr_service_url", ""):
+            await _run_paddle_ocr_http(
+                job_id, novel_slug, chapter_title_hint, image_paths,
+                state, event_queue, settings, out_filename,
             )
-            page = 0
-            for line in proc.stdout:
-                line = line.rstrip()
-                if not line:
-                    continue
-                if line.startswith("OCR: "):
-                    page += 1
-                evt = {"type": "ocr_progress", "step": "paddle", "page": page, "total": total, "msg": line}
-                asyncio.run_coroutine_threadsafe(event_queue.put(evt), loop)
-            proc.stdout.close()
-            return proc.wait()
-
-        returncode = await asyncio.to_thread(_run_and_stream)
-        if returncode != 0:
-            await event_queue.put({"type": "ocr_error", "msg": f"PaddleOCR thất bại (exit {returncode})"})
-            return
-
-        if not output_path.exists():
-            await event_queue.put({"type": "ocr_error", "msg": "PaddleOCR không tạo output.txt"})
-            return
-
-        full_text = output_path.read_text(encoding="utf-8").strip()
-        filename = out_filename or _parse_filename(chapter_title_hint, full_text)
-
-        settings.input_dir.mkdir(parents=True, exist_ok=True)
-        (settings.input_dir / filename).write_text(full_text, encoding="utf-8")
-
-        num, zh_title = parse_chapter_filename(filename)
-        await state.upsert_chapter(filename, novel_slug, num, zh_title, ocr_job_id=job_id)
-
-        await event_queue.put({
-            "type": "ocr_done",
-            "filename": filename,
-            "char_count": len(full_text),
-            "preview": full_text[:400],
-        })
+        else:
+            await _run_paddle_ocr_subprocess(
+                job_id, novel_slug, chapter_title_hint, image_paths,
+                state, event_queue, settings, out_filename,
+            )
 
     except Exception as exc:
         await event_queue.put({"type": "ocr_error", "msg": f"{type(exc).__name__}: {exc}"})
