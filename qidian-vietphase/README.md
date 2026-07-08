@@ -95,22 +95,14 @@ phí offline**, mặc định `OCR_DEFAULT_ENGINE=paddle`. Lưu ý khi deploy:
 - **GPU (khuyến nghị):** host phải cài **nvidia-container-toolkit**. Kiểm tra:
   ```bash
   nvidia-smi                                   # đọc "CUDA Version" + tên GPU
-  docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi
+  docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
   ```
-  Image OCR mặc định build cho **CUDA 12.6** (`cu126`). Nếu `nvidia-smi` báo CUDA
-  khác, sửa tag base image + URL index trong `qidian-ocr/Dockerfile` cho khớp
-  (`cu129`/`cu118`…).
-- Nếu Docker Compose **không nhận** `gpus: all`, thay bằng block:
-  ```yaml
-      deploy:
-        resources:
-          reservations:
-            devices:
-              - driver: nvidia
-                count: all
-                capabilities: [gpu]
-  ```
-- **Không có GPU?** Bỏ dòng `gpus: all` trong compose và đặt `PADDLE_DEVICE=cpu`
+  Image OCR mặc định build cho **CUDA 11.8** (`cu118`) — khớp driver **550.x**
+  (CUDA tối đa ~12.4). Muốn `cu126` cần driver **≥560**, rồi sửa CẢ tag base
+  image + URL index trong `qidian-ocr/Dockerfile`.
+- Compose v2 yêu cầu `gpus` là list (đã có sẵn trong `docker-compose.yml`).
+  Nếu cần dạng `deploy.resources`, xem docs Compose / NVIDIA.
+- **Không có GPU?** Bỏ block `gpus:` trong compose và đặt `PADDLE_DEVICE=cpu`
   cho service `ocr`, đổi base image `qidian-ocr/Dockerfile` sang `python:3.11-slim`
   + wheel `paddlepaddle` (CPU). Chậm hơn nhưng vẫn chạy.
 - Lần đầu, service `ocr` **tải model PP-OCRv6** về volume `paddlex-models` (cần

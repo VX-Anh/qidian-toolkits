@@ -27,13 +27,19 @@ COPY rules ./rules
 RUN uv sync --frozen --no-dev
 
 # Chạy non-root: tạo user 'app' và trao quyền /app cho nó.
-# Lưu ý: volume /data mount từ host — host phải cho phép user này ghi
-# (xem README; nếu cần, chown thư mục data trên host về UID 10001).
-RUN useradd --create-home --uid 10001 app && chown -R app:app /app
-USER app
+# Entrypoint (root) chown /data bind mount rồi exec runuser → app (xem docker-entrypoint.sh).
+RUN useradd --create-home --uid 10001 app \
+    && chown -R app:app /app \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 9999
 
+ENTRYPOINT ["/docker-entrypoint.sh"]
 # Một worker duy nhất: SQLite + RLock là per-process, không scale ngang trong
 # container này (đúng với mô hình single-user đã chọn).
 CMD ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999"]

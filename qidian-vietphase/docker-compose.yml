@@ -60,9 +60,12 @@ services:
       - paddlex-models:/root/.paddlex
 
     # Cấp toàn bộ GPU cho container. Yêu cầu nvidia-container-toolkit trên host.
-    # Nếu bản Docker Compose không nhận "gpus:", thay bằng block deploy.resources
-    # (xem README, mục deploy). Bỏ dòng này + đặt PADDLE_DEVICE=cpu để chạy CPU.
-    gpus: all
+    # Compose v2 yêu cầu gpus là list (không dùng scalar "all"). Không có GPU: bỏ
+    # block này + đặt PADDLE_DEVICE=cpu (xem README).
+    gpus:
+      - driver: nvidia
+        count: all
+        capabilities: [gpu]
 
 volumes:
   paddlex-models:

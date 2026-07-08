@@ -2,10 +2,12 @@
 # Image GPU cho server có NVIDIA (RTX 4090 = Ada, CC 8.9). Host cần cài
 # nvidia-container-toolkit và cấp GPU cho container (xem docker-compose.yml).
 #
-# CHỐT CUDA TAG: base image + wheel index PHẢI khớp CUDA mà `nvidia-smi` báo trên
-# host. Mặc định cu126 (CUDA 12.6). Nếu khác, đổi CẢ tag base image LẪN URL index
-# bên dưới cho khớp (cu129 / cu118 …).
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+# CHỐT CUDA TAG: base image + wheel index phải khớp driver host (nvidia-smi /
+# nvidia-container-cli kiểm tra CUDA tối thiểu của image).
+# Host hiện tại: driver 550.x → tối đa CUDA 12.4 → không chạy được cu126
+# (đòi driver ≥560). Paddle 3.3 chỉ có wheel cu118 / cu126 / cu129 → dùng cu118.
+# Đổi CẢ tag base image LẪN URL index nếu nâng driver lên ≥560 rồi chuyển cu126.
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -23,11 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # paddlepaddle-gpu KHÔNG có trên PyPI thường — cài từ index CUDA riêng của Paddle
-# (khớp cu126). Sau đó cài paddleocr + web deps từ PyPI. Không dùng uv.lock của
+# (khớp cu118). Sau đó cài paddleocr + web deps từ PyPI. Không dùng uv.lock của
 # qidian-ocr vì lock đó pin paddlepaddle bản CPU.
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
  && python3 -m pip install --no-cache-dir \
-        paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+        paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ \
  && python3 -m pip install --no-cache-dir \
         "paddleocr>=3.7.0" "fastapi>=0.115" "uvicorn[standard]>=0.32" anyio
 
