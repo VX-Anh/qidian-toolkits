@@ -3,7 +3,7 @@
   "name": "Qidian Chapter Scraper",
   "version": "2.1",
   "description": "Lưu chương Qidian về máy: chụp ảnh (.jpg) hoặc copy văn bản (.txt)",
-  "permissions": ["activeTab", "downloads", "storage", "debugger", "scripting"],
+  "permissions": ["activeTab", "downloads", "storage", "scripting", "nativeMessaging"],
   "host_permissions": ["https://www.qidian.com/*", "http://*/*", "https://*/*"],
   "action": {
     "default_popup": "popup.html",

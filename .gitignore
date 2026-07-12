@@ -28,3 +28,7 @@ env/
 qidian-vietphase/data/
 qidian-vietphase/secrets/*
 !qidian-vietphase/secrets/.gitignore
+
+# Native messaging host manifest — sinh ra lúc cài đặt (install.ps1), chứa
+# Extension ID + đường dẫn tuyệt đối riêng của từng máy
+qidian-extension/native-host/com.qidian.screenshot_host.json

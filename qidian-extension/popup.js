@@ -17,15 +17,22 @@ const FALLBACK_CROP_W = 695;
 const CHUNK_H         = 1400;
 const OVERLAP_H       = 120;
 const SAFE_PADDING    = 20;
-const JPEG_QUALITY    = 95;
 const MAX_RETRY       = 2;
 const PRE_SETTLE_MS   = 600;
 const POST_SCROLL_MS  = 400;
+const FONT_WAIT_MS    = 12000; // deadline tổng chờ font mã hóa Qidian load xong
+const FONT_POLL_MS    = 200;   // chu kỳ poll document.fonts.check()
+const FONT_SETTLE_MS  = 250;   // đệm sau khi font ready + paint để chắc chắn vẽ xong
 const MIN_CHUNK_RATIO = 0.55;
 const EXPORT_BASE_DIR = 'data/vietphase';
 const DEFAULT_SERVER  = 'http://localhost:9999';
+const NATIVE_HOST_NAME        = 'com.qidian.screenshot_host';
+const CHUNK_SCROLL_SETTLE_MS  = 150; // đệm sau khi cuộn thật tới từng chunk, trước khi chụp
+const VIEWPORT_MARGIN         = 20;  // đệm an toàn dưới viewport thật khi tính chunk cao tối đa
 
-const DETECT_EXPR = `(function() {
+// Đo vùng nội dung. Chạy qua chrome.scripting.executeScript({func: detectContentBounds})
+// — KHÔNG dùng string+eval (CSP của trang chặn unsafe-eval trong injected script).
+function detectContentBounds() {
   const SELS = ["main[data-type='cjk']","#j_chapterContent",".read-content",".chapter-content"];
   let el = null;
   for (const s of SELS) { el = document.querySelector(s); if (el) break; }
@@ -46,8 +53,87 @@ const DETECT_EXPR = `(function() {
     firstPTop:   firstP ? Math.round(firstP.getBoundingClientRect().top + sy)    : null,
     lastPBottom: lastP  ? Math.round(lastP.getBoundingClientRect().bottom + sy)  : null,
     paragraphBottoms,
+    viewportHeight: window.innerHeight,
   };
-})()` ;
+}
+
+// Chờ ĐÚNG font mã hóa đang áp lên khối nội dung load xong (thay vì tin
+// document.fonts.ready — nó resolve sớm khi font nạp lazy chưa được request).
+// Chạy qua chrome.scripting.executeScript({func: waitForEncryptedFont, args:[waitMs,pollMs]}).
+async function waitForEncryptedFont(waitMs, pollMs) {
+  const t0 = performance.now();
+  const SYSTEM_FONTS = new Set(['serif','sans-serif','monospace','cursive','fantasy',
+    'system-ui','ui-serif','ui-sans-serif','ui-monospace','segoe ui','arial','helvetica',
+    'helvetica neue','tahoma','verdana','times new roman','georgia','pingfang sc',
+    'pingfang tc','hiragino sans gb','microsoft yahei','simsun','simhei','stheiti',
+    'noto sans cjk sc','source han sans sc','source han sans cn','wenquanyi micro hei']);
+
+  // Ưu tiên phần tử mang class encrypt (cùng selector với scanDomSelectors);
+  // fallback: khối nội dung như detectContentBounds.
+  let el = document.querySelector("[class*='r-font-encrypt'], main[class*='encrypt']");
+  const encrypted = !!el;
+  if (!el) {
+    const SELS = ["main[data-type='cjk']","#j_chapterContent",".read-content",".chapter-content"];
+    for (const s of SELS) { el = document.querySelector(s); if (el) break; }
+  }
+  if (!el) return { encrypted: false, loaded: true, family: null, waitedMs: 0 };
+
+  // Tách font-family, loại font hệ thống — còn lại là web-font tùy biến (font mã
+  // hóa Qidian là font tên ngẫu nhiên đứng đầu danh sách).
+  const families = getComputedStyle(el).fontFamily
+    .split(',')
+    .map(f => f.trim().replace(/^["']|["']$/g, ''))
+    .filter(f => f && !SYSTEM_FONTS.has(f.toLowerCase()));
+  if (!families.length) return { encrypted, loaded: !encrypted, family: null, waitedMs: 0 };
+
+  // Sample text lấy từ chính nội dung để check đúng dải glyph đang dùng.
+  const sampleText = (el.textContent || '').replace(/\s+/g, '').slice(0, 30) || '一';
+  const specs = families.map(f => '16px "' + f + '"');
+
+  // Ép trình duyệt request font nếu nó đang nạp lazy (không chờ kết quả ở đây —
+  // vòng poll fonts.check() bên dưới mới là nguồn sự thật).
+  for (const spec of specs) { try { document.fonts.load(spec, sampleText); } catch (e) {} }
+
+  const deadline = t0 + waitMs;
+  const check = () => specs.every(spec => {
+    try { return document.fonts.check(spec, sampleText); } catch (e) { return true; }
+  });
+  let loaded = check();
+  while (!loaded && performance.now() < deadline) {
+    await new Promise(r => setTimeout(r, pollMs));
+    loaded = check();
+  }
+
+  // Font loaded ≠ đã paint: chờ 2 frame để trình duyệt vẽ lại xong.
+  if (loaded) await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  return { encrypted, loaded, family: families.join(', '),
+           waitedMs: Math.round(performance.now() - t0) };
+}
+
+// Cuộn THẬT tới y (tọa độ tuyệt đối tài liệu), chờ 2 khung paint, rồi báo lại vị
+// trí cuộn thực tế đạt được (có thể bị kẹp ở cuối trang) + tọa độ màn hình của
+// viewport hiện tại. LƯU Ý: dù MDN mô tả window.screenY là đỉnh VIEWPORT (dưới
+// thanh tab/toolbar), thực tế đo được trên Chrome lại là đỉnh CỬA SỔ NGOÀI (kể
+// cả thanh tab) — ảnh chụp thử bị dính nguyên thanh tab ở trên vì tin thẳng giá
+// trị này. Phải tự bù chênh lệch bằng outerHeight-innerHeight (xem toPhysicalRect).
+function scrollAndReport(y) {
+  window.scrollTo(0, y);
+  return new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      resolve({
+        scrollY: window.scrollY,
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        outerWidth: window.outerWidth,
+        outerHeight: window.outerHeight,
+        screenX: window.screenX,
+        screenY: window.screenY,
+        devicePixelRatio: window.devicePixelRatio || 1,
+      });
+    }));
+  });
+}
 
 // ── Restore novel slug + server URL ───────────────────────────────────────────
 chrome.storage.local.get(['novel_slug', 'server_url'], (s) => {
@@ -114,72 +200,107 @@ async function getActiveTab() {
   return tab;
 }
 
-// ── Chrome DevTools Protocol helpers ────────────────────────────────────────
-function dbgAttach(tabId) {
-  return new Promise((resolve, reject) => {
-    chrome.debugger.attach({ tabId }, '1.3', () => {
-      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-      else resolve();
-    });
+// ── Native Messaging: chụp màn hình THẬT qua qidian_screenshot_host.py ────────
+// Không còn dùng chrome.debugger/CDP cho việc chụp (né lỗi Chromium render sai
+// glyph khi captureBeyondViewport chụp vùng "ngoài viewport" chưa từng paint
+// thật — xem qidian-extension/docs/native-screenshot-tool-plan.md). Host native
+// đọc thẳng pixel màn hình bằng mss, y hệt Windows Snipping Tool.
+function openNativeCapturePort() {
+  const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+  let pending = null;
+  port.onMessage.addListener((msg) => {
+    if (pending) { const { resolve } = pending; pending = null; resolve(msg); }
   });
-}
-
-function dbgDetach(tabId) {
-  return new Promise(resolve => chrome.debugger.detach({ tabId }, resolve));
-}
-
-function dbgSend(tabId, method, params = {}) {
-  return new Promise((resolve, reject) => {
-    chrome.debugger.sendCommand({ tabId }, method, params, result => {
-      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-      else resolve(result);
-    });
+  port.onDisconnect.addListener(() => {
+    if (pending) {
+      const { reject } = pending;
+      pending = null;
+      reject(new Error(chrome.runtime.lastError?.message ||
+        'Native host đã ngắt kết nối — đã cài đặt qidian-extension/native-host/install.ps1 chưa?'));
+    }
   });
+  function send(msg) {
+    return new Promise((resolve, reject) => {
+      if (pending) { reject(new Error('native port đang bận (gọi chồng lệnh)')); return; }
+      pending = { resolve, reject };
+      port.postMessage(msg);
+    });
+  }
+  return { send, disconnect: () => port.disconnect() };
 }
 
-// ── Capture chapter via CDP ──────────────────────────────────────────────────
-async function captureWithRetry(tabId, clipParams) {
+async function captureViaNativeHost(nativePort, rect) {
   let lastErr;
   for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
     try {
       if (attempt > 0) await wait(300 * attempt);
-      const { data } = await dbgSend(tabId, 'Page.captureScreenshot', {
-        format: 'jpeg',
-        quality: JPEG_QUALITY,
-        captureBeyondViewport: true,
-        clip: clipParams,
-      });
-      return data;
+      const resp = await nativePort.send({ action: 'capture', ...rect });
+      if (!resp.ok) throw new Error(resp.error || 'native host trả lỗi không rõ');
+      return resp.dataUrl;
     } catch (err) { lastErr = err; }
   }
   throw lastErr;
 }
 
+// Quy đổi tọa độ CSS-px trong viewport hiện tại (sau khi đã cuộn) sang tọa độ
+// VẬT LÝ trên màn hình thật, để native host chụp đúng vùng. window.screenX/screenY
+// đã bao gồm vị trí cửa sổ + chiều cao thanh công cụ trình duyệt.
+function toPhysicalRect(scrollInfo, viewportRelX, viewportRelY, width, height) {
+  const dpr = scrollInfo.devicePixelRatio || 1;
+  // Bù chênh lệch giữa "đỉnh cửa sổ ngoài" (window.screenY đo được thực tế) và
+  // "đỉnh viewport nội dung" (dưới thanh tab/toolbar) — xem ghi chú ở scrollAndReport.
+  const chromeUIHeight = Math.max(0, (scrollInfo.outerHeight || 0) - (scrollInfo.innerHeight || 0));
+  return {
+    x: Math.round((scrollInfo.screenX + viewportRelX) * dpr),
+    y: Math.round((scrollInfo.screenY + chromeUIHeight + viewportRelY) * dpr),
+    width: Math.round(width * dpr),
+    height: Math.round(height * dpr),
+  };
+}
+
 async function captureChapter(tabId) {
-  await dbgAttach(tabId);
   const shots = [];
+  const nativePort = openNativeCapturePort();
 
   try {
     // Phase 1: Pre-scroll để ổn định JS/ads động trước khi đo
     setStatus('Đang ổn định trang...');
-    await dbgSend(tabId, 'Runtime.evaluate', {
-      expression: 'window.scrollTo(0, document.body.scrollHeight)',
-      returnByValue: false,
+    await chrome.scripting.executeScript({
+      target: { tabId }, func: () => window.scrollTo(0, document.body.scrollHeight),
     });
     await wait(PRE_SETTLE_MS);
-    await dbgSend(tabId, 'Runtime.evaluate', {
-      expression: 'window.scrollTo(0, 0)',
-      returnByValue: false,
+    await chrome.scripting.executeScript({
+      target: { tabId }, func: () => window.scrollTo(0, 0),
     });
     await wait(POST_SCROLL_MS);
 
-    // Phase 2: Detect element bounds sau khi DOM ổn định
-    const { result } = await dbgSend(tabId, 'Runtime.evaluate', {
-      expression: DETECT_EXPR,
-      returnByValue: true,
+    // Phase 1.5: CHỜ ĐÚNG FONT MÃ HÓA LOAD + PAINT XONG trước khi đo/chụp.
+    // Qidian dùng font mã hóa (r-font-encrypt): mã ký tự trong DOM bị xáo trộn,
+    // chỉ hiển thị ĐÚNG khi web-font tùy biến đã được apply. document.fonts.ready
+    // KHÔNG đủ tin (resolve sớm khi font nạp lazy chưa được request), nên
+    // waitForEncryptedFont chủ động ép load (fonts.load) rồi poll fonts.check()
+    // cho chính font đang áp lên khối nội dung, kèm double-rAF chờ paint. Quá
+    // hạn mà font chưa load → DỪNG hẳn thay vì âm thầm chụp ảnh hỏng.
+    setStatus('Đang chờ font mã hóa load...');
+    const [{ result: fontInfo }] = await chrome.scripting.executeScript({
+      target: { tabId }, func: waitForEncryptedFont, args: [FONT_WAIT_MS, FONT_POLL_MS],
     });
-    if (!result.value) return [];
-    const info = result.value;
+    if (fontInfo?.encrypted && !fontInfo.loaded) {
+      throw new Error(
+        `Font mã hóa chưa load xong sau ${Math.round(FONT_WAIT_MS / 1000)}s — hãy reload trang rồi chụp lại.`);
+    }
+    await wait(FONT_SETTLE_MS);
+
+    // Phase 2: Detect element bounds sau khi DOM ổn định
+    const [{ result: info }] = await chrome.scripting.executeScript({
+      target: { tabId }, func: detectContentBounds,
+    });
+    if (!info) return [];
+
+    // KHÔNG gọi chrome.windows.update({focused:true}) ở đây: nó chuyển focus
+    // OS sang cửa sổ Chrome, mà popup extension tự đóng ngay khi mất focus —
+    // giết cả tiến trình chụp đang chạy dở. Chấp nhận đánh đổi: giả định cửa
+    // sổ Chrome đã ở trên cùng vì người dùng vừa bấm nút trong chính popup đó.
 
     // Phase 3: Tính vùng crop từ DOM thực tế
     const cropX = (info.left > 0) ? info.left : FALLBACK_CROP_X;
@@ -196,6 +317,13 @@ async function captureChapter(tabId) {
     const totalH = endY - startY;
     if (totalH <= 0) return [];
 
+    // Chụp giờ đọc đúng pixel màn hình thật (không còn captureBeyondViewport) —
+    // mỗi chunk phải cuộn thật vào trong viewport rồi mới chụp được, nên chiều
+    // cao mỗi chunk phải nằm gọn trong viewport thật, trừ hao OVERLAP_H (chunk
+    // sau lùi lại OVERLAP_H) + SAFE_PADDING (snap có thể vượt nhẹ) + đệm an toàn.
+    const effectiveChunkH = Math.max(300,
+      Math.min(CHUNK_H, info.viewportHeight - SAFE_PADDING - VIEWPORT_MARGIN - OVERLAP_H));
+
     // Phase 4: Chunked capture, ưu tiên cắt ở đáy đoạn <p> để tránh cắt ngang dòng
     const paragraphBottoms = Array.isArray(info.paragraphBottoms) ? info.paragraphBottoms : [];
     let y = startY;
@@ -205,24 +333,36 @@ async function captureChapter(tabId) {
       setProgress(Math.round((progressed / totalH) * 100));
       setStatus(`Chụp vùng ${idx + 1}...`);
 
-      const targetEnd = Math.min(endY, y + CHUNK_H);
-      const minSnapY = y + Math.floor(CHUNK_H * MIN_CHUNK_RATIO);
+      const targetEnd = Math.min(endY, y + effectiveChunkH);
+      const minSnapY = y + Math.floor(effectiveChunkH * MIN_CHUNK_RATIO);
       const snappedEnd = paragraphBottoms.length ? pickLastInRange(paragraphBottoms, minSnapY, targetEnd) : null;
       const endAt = (snappedEnd && snappedEnd > y) ? Math.min(endY, snappedEnd + SAFE_PADDING) : targetEnd;
 
       const captureY = (idx === 0) ? y : Math.max(startY, y - OVERLAP_H);
       const captureH = Math.max(1, endAt - captureY);
 
-      const data = await captureWithRetry(tabId, {
-        x: cropX, y: captureY, width: cropW, height: captureH, scale: 1,
+      // Cuộn THẬT tới vùng cần chụp, chờ paint xong, đọc lại vị trí cuộn/màn
+      // hình thực tế (có thể bị kẹp ở cuối trang, khác với captureY yêu cầu).
+      const [{ result: scrollInfo }] = await chrome.scripting.executeScript({
+        target: { tabId }, func: scrollAndReport, args: [captureY],
       });
+      await wait(CHUNK_SCROLL_SETTLE_MS);
 
-      shots.push(`data:image/jpeg;base64,${data}`);
-      y = endAt;
+      const viewportRelY = captureY - scrollInfo.scrollY;
+      const clipH = Math.max(1, Math.min(captureH, scrollInfo.innerHeight - viewportRelY));
+      const rect = toPhysicalRect(scrollInfo, cropX, viewportRelY, cropW, clipH);
+
+      const dataUrl = await captureViaNativeHost(nativePort, rect);
+      shots.push(dataUrl);
+
+      // Nếu viewport thật buộc phải chụp ngắn hơn dự kiến (hiếm — vd kẹp cuối
+      // trang), tiếp tục đúng từ điểm ĐÃ chụp thay vì endAt lý thuyết, để không
+      // mất nội dung ở khoảng bị hụt.
+      y = (clipH < captureH) ? (captureY + clipH) : endAt;
       idx++;
     }
   } finally {
-    await dbgDetach(tabId);
+    nativePort.disconnect();
   }
 
   return shots;
