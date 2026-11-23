@@ -154,9 +154,12 @@ def check_root(root: Path) -> str | None:
     if _is_within(root, _norm(REPO_DIR)) or _is_within(_norm(REPO_DIR), root):
         return f"{root} nằm trong (hoặc chứa) repo — dùng thư mục tạm ngoài repo, vd /tmp/vp-ux"
     has_marker = (root / MARKER).is_file()
+    # Ngoại lệ duy nhất: env đang trỏ đúng vào một đích mẫu (vd đã export để chạy uvicorn
+    # trên dữ liệu mẫu). Đường dẫn cấu hình khác nằm dưới root vẫn bị từ chối.
+    demo_targets = {_norm(p) for p in _paths(root).values()} if has_marker else set()
     for real in _configured_paths():
-        if has_marker and _is_within(real, root):
-            continue  # env đang trỏ vào chính dữ liệu mẫu (vd đã export để chạy uvicorn)
+        if real in demo_targets:
+            continue
         if _is_within(root, real) or _is_within(real, root):
             return f"{root} trùng với thư mục dữ liệu đang cấu hình ({real})"
     for p in (Path("/data"), Path("/app")):           # volume Docker (docker-compose.yml)
@@ -318,7 +321,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Tạo dữ liệu mẫu VietPhase trong thư mục tạm.")
     ap.add_argument("--root", required=True, type=Path, help="thư mục tạm (ngoài repo)")
     ap.add_argument("--force", action="store_true",
-                    help="cho phép ghi vào thư mục không trống chưa có dấu dữ liệu mẫu")
+                    help="cho phép seed đầy đủ (ghi đè) vào thư mục không trống")
     ap.add_argument("--novel", default="a",
                     help="truyện áp dụng cho --mark-done/--unmark: a | b | slug (mặc định a)")
     ap.add_argument("--mark-done", type=int, action="append", default=[], metavar="N",
@@ -360,9 +363,12 @@ def main() -> int:
         if root.exists() and not root.is_dir():
             print(f"Từ chối: {root} không phải thư mục.", file=sys.stderr)
             return 2
-        if root.is_dir() and any(root.iterdir()) and not has_marker and not args.force:
-            print(f"Từ chối: {root} không trống và không phải dữ liệu mẫu (thêm --force nếu chắc chắn).",
-                  file=sys.stderr)
+        # Seed đầy đủ ghi đè novel.md, chương gốc và trạng thái chương → thư mục không trống
+        # (kể cả thư mục mẫu đã có) luôn cần --force. Sửa từng chương thì dùng --mark-done/--unmark.
+        if root.is_dir() and any(root.iterdir()) and not args.force:
+            hint = (" Thư mục mẫu đã có: dùng --mark-done/--unmark, hoặc --force để tạo lại."
+                    if has_marker else " Thêm --force nếu chắc chắn.")
+            print(f"Từ chối: {root} không trống.{hint}", file=sys.stderr)
             return 2
         print(f"Tạo dữ liệu mẫu trong {root}")
         seed(root)

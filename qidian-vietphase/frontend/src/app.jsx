@@ -165,6 +165,8 @@ function App() {
   const [currentSlug, setCurrentSlug] = useStateA(null);
   const [tab, setRouteTab] = useStateA("chapters");
   const [readerChapter, setReaderChapter] = useStateA(null);
+  // Bản dịch vừa lưu trong overlay đối chiếu → màn đọc cập nhật nội dung chương đó.
+  const [savedOutput, setSavedOutput] = useStateA(null);   // { filename, content, n }
   const [chaptersStatus, setChaptersStatus] = useStateA("loading");
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
@@ -628,7 +630,7 @@ function App() {
         setToast({ msg: `Đã upload ${saved.length} file`, type: "success" });
       }
     } catch (err) {
-      setToast({ msg: `Upload thất bại: ${err.message}`, type: "error" });
+      setToast({ msg: `Tải lên thất bại: ${err.message}`, type: "error" });
     }
   }
 
@@ -702,7 +704,7 @@ function App() {
       setToast({ msg: `Đang OCR ${imgs.length} ảnh (${engineLabel})…`, type: "info" });
       streamOcrJob(job_id, `OCR ${imgs.length} ảnh · ${engineLabel}`, fd.get("novel_slug"));
     } catch (err) {
-      setToast({ msg: `Upload ảnh thất bại: ${err.message}`, type: "error" });
+      setToast({ msg: `Tải ảnh lên thất bại: ${err.message}`, type: "error" });
     }
   }
 
@@ -811,6 +813,7 @@ function App() {
   async function onSaveOutputText(filename, text) {
     try {
       await api.put(`/api/chapters/${encodeURIComponent(filename)}/output`, { content: text });
+      setSavedOutput(prev => ({ filename, content: text, n: (prev?.n || 0) + 1 }));
       setToast({ msg: "Đã lưu bản dịch", type: "success" });
       return true;
     } catch (err) {
@@ -1084,6 +1087,7 @@ function App() {
               onReloadChapters={reloadReaderChapters}
               novel={currentNovel}
               routeChapter={readerChapter}
+              savedOutput={savedOutput}
               onReadChapter={num => setReaderChapter(String(num))}
               onOpen={setOpenChapter}
               onGoChapters={() => setTab("chapters")}

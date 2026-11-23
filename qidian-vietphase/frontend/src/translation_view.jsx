@@ -69,6 +69,8 @@ function TranslationView({
   const isCurrent = (fn) => currentFnRef.current === fn;
   const loadGenRef = useRefT(0);   // bản dịch, ảnh: tăng mỗi lần effect tải chương chạy
   const srcGenRef = useRefT(0);    // bản gốc + phân đoạn: tăng mỗi lần loadSource chạy
+  const srcSaveSeqRef = useRefT(0); // lượt lưu bản gốc / bản dịch: chỉ kết quả của lượt mới nhất được áp
+  const outSaveSeqRef = useRefT(0);
 
   // Pane nào đang mở editor (chưa lưu) → hỏi trước khi đóng/chuyển chương.
   const editingRef = useRefT({});
@@ -394,9 +396,12 @@ function TranslationView({
             onEditingChange={onEditingChange}
             onSaveSource={async (text) => {
               const raw = chapter.filename;
+              const gen = loadGenRef.current;          // lượt mở chương lúc bấm lưu
+              const seq = ++srcSaveSeqRef.current;     // lượt lưu mới nhất mới được áp
               const ok = await onSaveSource?.(text);
               if (ok === false) return false;
-              if (!isCurrent(raw)) return true;   // đã sang chương khác trong lúc lưu
+              // Đã sang chương khác / mở lại chương (3 → 5 → 3) / có lượt lưu mới hơn → không áp.
+              if (!isCurrent(raw) || loadGenRef.current !== gen || srcSaveSeqRef.current !== seq) return true;
               setSourceText(text);
               loadSource();   // build lại pretranslate segments từ bản vừa lưu
               return true;
@@ -411,7 +416,18 @@ function TranslationView({
             isStreaming={isStreaming}
             outStatus={outStatus}
             onRetry={retryLoad}
-            onSaveOutput={onSaveOutput}
+            onSaveOutput={async (text) => {
+              const raw = chapter.filename;
+              const gen = loadGenRef.current;
+              const seq = ++outSaveSeqRef.current;
+              const ok = await onSaveOutput?.(text);
+              if (ok === false) return false;
+              if (isCurrent(raw) && loadGenRef.current === gen && outSaveSeqRef.current === seq) {
+                setOutputText(text);
+                setOutStatus("ready");
+              }
+              return true;
+            }}
             onEditingChange={onEditingChange}
           />
         )}
@@ -493,7 +509,11 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
   const bodyRef = useRefT(null);
 
   // Reset editor + selection state whenever the chapter changes.
-  useEffectT(() => { setEditing(false); setSel(null); setAdding(null); }, [chapter?.filename]);
+  // Chương của lượt lưu đang chạy: lưu xong mà đã sang chương khác thì không đụng editor mới.
+  // Lượt sửa: tăng khi đổi chương, mở/huỷ editor. Kết quả lưu về muộn của lượt cũ bị bỏ,
+  // không đóng editor hay ghi đè bản nháp của chương/lượt sửa mới.
+  const sessRef = useRefT(0);
+  useEffectT(() => { sessRef.current++; setEditing(false); setDraft(""); setSaving(false); setSel(null); setAdding(null); }, [chapter?.filename]);
 
   // Dismiss the selection popover on an outside click.
   useEffectT(() => {
@@ -506,13 +526,16 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
     return () => document.removeEventListener("mousedown", clear);
   }, [sel]);
 
-  const enterEdit = () => { setDraft(sourceText || ""); setEditing(true); setSel(null); };
+  const enterEdit = () => { sessRef.current++; setDraft(sourceText || ""); setEditing(true); setSaving(false); setSel(null); };
+  const cancelEdit = () => { sessRef.current++; setEditing(false); setSaving(false); };
   const [saving, setSaving] = useStateT(false);
   useEffectT(() => { onEditingChange?.("source", editing); }, [editing]);
   useEffectT(() => () => onEditingChange?.("source", false), []);
   const commitEdit = async () => {
+    const sess = sessRef.current;
     setSaving(true);
     const ok = await onSaveSource?.(draft);
+    if (sessRef.current !== sess) return;  // lượt sửa đã đổi (sang chương khác, huỷ, mở lại)
     setSaving(false);
     if (ok !== false) setEditing(false);   // lỗi → giữ editor + bản nháp
   };
@@ -543,7 +566,7 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
   return (
     <div className={`tv-pane ${isImage ? "ocr" : "zh"}`}>
       <div className="tv-pane-h">
-        <span className="label">{isImage ? "Kết quả OCR" : "Bản gốc 中"}</span>
+        <span className="label">{isImage ? "Kết quả OCR" : "Bản gốc (tiếng Trung)"}</span>
         {editing && <span className="editor-dirty-dot" title="Có thay đổi chưa lưu" />}
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
           {(editing ? draft.length : charCount)} ký tự
@@ -551,7 +574,7 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
         {editing ? (
           <>
             <button className="btn success sm" onClick={commitEdit} disabled={saving}><Icon name="save" size={11} /> {saving ? "Đang lưu…" : "Lưu"}</button>
-            <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
+            <button className="btn ghost sm" onClick={cancelEdit}>Hủy</button>
           </>
         ) : (
           <>
@@ -673,7 +696,10 @@ function ViPane({ chapter, translated, isStreaming, outStatus = "ready", onRetry
   const [editing, setEditing] = useStateT(false);
   const [draft, setDraft] = useStateT("");
 
-  useEffectT(() => { setOverride(null); setEditing(false); }, [chapter?.filename]);
+  const sessRef = useRefT(0);   // lượt sửa, xem OcrPane
+  useEffectT(() => { sessRef.current++; setOverride(null); setEditing(false); setDraft(""); setSaving(false); }, [chapter?.filename]);
+  // Bản dịch nguồn đổi (tải lại, lưu xong) → bỏ bản ghi đè cục bộ.
+  useEffectT(() => { setOverride(null); }, [translated]);
 
   const display = override != null ? override : translated;
   // Bản dịch đã lưu chưa tải xong / tải lỗi (và không có stream): không cho sửa/sao chép.
@@ -683,16 +709,20 @@ function ViPane({ chapter, translated, isStreaming, outStatus = "ready", onRetry
     if (!display) return;
     navigator.clipboard.writeText(display).catch(() => {});
   };
-  const enterEdit = () => { setDraft(display || ""); setEditing(true); };
+  const enterEdit = () => { sessRef.current++; setDraft(display || ""); setEditing(true); setSaving(false); };
+  const cancelEdit = () => { sessRef.current++; setEditing(false); setSaving(false); };
   const [saving, setSaving] = useStateT(false);
   useEffectT(() => { onEditingChange?.("output", editing); }, [editing]);
   useEffectT(() => () => onEditingChange?.("output", false), []);
   const commitEdit = async () => {
+    const sess = sessRef.current;
+    const text = draft;
     setSaving(true);
-    const ok = await onSaveOutput?.(draft);
+    const ok = await onSaveOutput?.(text);
+    if (sessRef.current !== sess) return;   // lượt sửa đã đổi: không gán bản nháp này cho editor mới
     setSaving(false);
     if (ok === false) return;               // lỗi → giữ editor + bản nháp
-    setOverride(draft);
+    setOverride(text);
     setEditing(false);
   };
 
@@ -709,7 +739,7 @@ function ViPane({ chapter, translated, isStreaming, outStatus = "ready", onRetry
         {editing ? (
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <button className="btn success sm" onClick={commitEdit} disabled={saving}><Icon name="save" size={11} /> {saving ? "Đang lưu…" : "Lưu"}</button>
-            <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
+            <button className="btn ghost sm" onClick={cancelEdit}>Hủy</button>
           </div>
         ) : (
           <>
@@ -809,7 +839,7 @@ function AddTermForm({ zh, x, y, onSubmit, onCancel }) {
       </div>
       <div className="row">
         <input className="input-field" value={z} onChange={e => setZ(e.target.value)} aria-label="Thuật ngữ tiếng Trung"
-          style={{ width: 110, fontFamily: "var(--font-mono)" }} placeholder="中" />
+          style={{ width: 110, fontFamily: "var(--font-mono)" }} placeholder="Chữ Hán" />
         <span className="arrow">→</span>
         <input ref={viRef} className="input-field" value={vi} onChange={e => setVi(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }}

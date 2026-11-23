@@ -15,7 +15,7 @@ function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk, 
         <div className="brand-mark">A</div>
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
           <span className="brand-name">AI-Translate</span>
-          <span className="brand-sub">TaleStack · 中→Việt</span>
+          <span className="brand-sub">TaleStack · Trung → Việt</span>
         </div>
       </div>
 

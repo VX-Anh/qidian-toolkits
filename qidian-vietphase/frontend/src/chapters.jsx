@@ -39,7 +39,7 @@ function ChaptersScreen({
           {!hasChecked ? (
             <>
               <button className="btn" onClick={() => uploadRef.current?.click()}>
-                <Icon name="upload" size={14} /> Upload .txt
+                <Icon name="upload" size={14} /> Tải lên .txt
               </button>
               <input
                 id="dummy-upload"
@@ -191,8 +191,8 @@ function ChaptersScreen({
                     <StatusBlock
                       kind="empty"
                       title="Truyện chưa có chương nào"
-                      desc="Upload file .txt chương tiếng Trung, OCR ảnh, hoặc quét thư mục để bắt đầu."
-                      actions={<button className="btn sm" onClick={() => uploadRef.current?.click()}><Icon name="upload" size={12} /> Upload .txt</button>}
+                      desc="Tải lên file .txt chương tiếng Trung, OCR ảnh, hoặc quét thư mục để bắt đầu."
+                      actions={<button className="btn sm" onClick={() => uploadRef.current?.click()}><Icon name="upload" size={12} /> Tải lên .txt</button>}
                     />
                   ) : (
                     <StatusBlock

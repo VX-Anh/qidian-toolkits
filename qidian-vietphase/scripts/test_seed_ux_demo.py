@@ -137,6 +137,36 @@ class SeedSymlinkTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             seed_mod.ensure_inside(self.root, self.root / ".." / "outside" / "f.txt")
 
+    # ── Seed đầy đủ vào thư mục không trống cần --force (kể cả thư mục mẫu) ──
+    def test_full_seed_on_marked_root_needs_force(self):
+        (self.root / seed_mod.MARKER).write_text("x", encoding="utf-8")
+        novel_md = self.root / "rules" / "truyen-mau-a" / "novel.md"
+        novel_md.parent.mkdir(parents=True)
+        novel_md.write_text("giữ nguyên", encoding="utf-8")
+        self.assertEqual(self.run_main(), 2)
+        self.assertEqual(novel_md.read_text(encoding="utf-8"), "giữ nguyên")
+
+    def test_full_seed_on_non_empty_root_needs_force(self):
+        (self.root / "file.txt").write_text("x", encoding="utf-8")
+        self.assertEqual(self.run_main(), 2)
+
+    # ── Ngoại lệ đường dẫn cấu hình chỉ áp cho đúng đích mẫu ────────────────
+    def test_configured_path_under_marked_root_refused(self):
+        (self.root / seed_mod.MARKER).write_text("x", encoding="utf-8")
+        os.environ["OUTPUT_DIR"] = str(self.root / "khac")
+        try:
+            self.assertIsNotNone(seed_mod.check_root(self.root))
+        finally:
+            os.environ.pop("OUTPUT_DIR", None)
+
+    def test_configured_demo_target_allowed(self):
+        (self.root / seed_mod.MARKER).write_text("x", encoding="utf-8")
+        os.environ["OUTPUT_DIR"] = str(self.root / "output")
+        try:
+            self.assertIsNone(seed_mod.check_root(self.root))
+        finally:
+            os.environ.pop("OUTPUT_DIR", None)
+
 
 if __name__ == "__main__":
     unittest.main()

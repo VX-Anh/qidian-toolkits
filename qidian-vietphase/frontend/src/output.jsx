@@ -157,6 +157,7 @@ function RdStatus(props) {
 function OutputScreen({
   chapters = [], chaptersStatus = "ready", onReloadChapters, novel, routeChapter = null,
   onReadChapter, onOpen, onGoChapters, onOpenRail, suspendKeys = false, fontMode = "serif", onFontMode,
+  savedOutput = null,
 }) {
   const slug = novel?.slug || null;
   const isMobile = useRdMobile();
@@ -191,6 +192,7 @@ function OutputScreen({
   const aaBtnRef = useRefO(null);
   const aaPanelRef = useRefO(null);
   const tocListRef = useRefO(null);
+  const tocAsideRef = useRefO(null);
 
   const filename = cur?.filename || null;
   const loadKey = rdLoadKey(filename, loadSeq);
@@ -234,8 +236,14 @@ function OutputScreen({
     if (route != null && route !== "") {
       const n = Number(route);
       const hit = Number.isFinite(n) ? done.find(c => c.chapter_num === n) : null;
-      if (!hit) { setCur(null); setMissing({ num: route }); return; }
       const prog = rdLoadProgress(slug);
+      if (!hit) {
+        // URL do chính trình đọc ghi (trùng tiến độ đã nhớ) mà chương đó không còn bản dịch,
+        // vd tải lại tab sau khi chương bị đưa đi dịch lại → khôi phục phiên: mở chương gần nhất.
+        // Link sâu người dùng tự mở tới chương chưa dịch → báo thiếu bản dịch.
+        if (prog && done.length && Number.isFinite(n) && prog.num === n) { go(rdNearest(done, n)); return; }
+        setCur(null); setMissing({ num: route }); return;
+      }
       go(hit, { restore: prog && prog.num === hit.chapter_num ? { para: prog.para, pin: prog.pin, frac: prog.frac } : null, notify: false });
       return;
     }
@@ -252,6 +260,16 @@ function OutputScreen({
 
   // Route đã xử lý gần nhất. Route đổi lúc danh sách đang tải/lỗi thì giữ lại, xử lý khi "ready".
   const handledRouteRef = useRefO(undefined);
+
+  // Không có chương nào để hiện (chưa có bản dịch lúc xử lý route, vd bỏ số chương khỏi URL
+  // của truyện chưa dịch chương nào) mà giờ đã có chương dịch xong → chọn lại theo route/tiến độ.
+  useEffectO(() => {
+    if (!initRef.current || chaptersStatus !== "ready") return;
+    if (cur || missing || !done.length) return;
+    if (handledRouteRef.current !== routeChapter) return;   // route mới: để effect route xử lý
+    resolve(routeChapter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done, chaptersStatus, cur, missing]);
 
   // Lần đầu danh sách chương sẵn sàng.
   useEffectO(() => {
@@ -324,6 +342,15 @@ function OutputScreen({
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filename, loadSeq]);
+
+  // Bản dịch chương đang đọc vừa được lưu (overlay đối chiếu) → thay nội dung ngay, giữ vị trí cuộn.
+  // Sao chép / tải .txt đọc từ `content` nên cũng lấy bản mới.
+  useEffectO(() => {
+    if (!savedOutput || !filename || savedOutput.filename !== filename) return;
+    const text = String(savedOutput.content || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    setLoadRes({ key: loadKey, content: text, error: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedOutput]);
 
   // Có mạng lại → tự thử lại.
   useEffectO(() => {
@@ -421,7 +448,20 @@ function OutputScreen({
       if (suspendKeys || e.defaultPrevented) return;
       if (e.key === "Escape") {
         if (aaOpen) { setAaOpen(false); aaBtnRef.current?.focus(); return; }
-        if (isMobile && tocOpen) { setTocOpen(false); tocBtnRef.current?.focus(); }
+        // Mobile: drawer đang mở. Desktop: đang thao tác trong cột mục lục (focus nằm trong đó).
+        const inToc = tocAsideRef.current?.contains(document.activeElement);
+        if (tocOpen && (isMobile || inToc)) { e.preventDefault(); setTocOpen(false); tocBtnRef.current?.focus(); }
+        return;
+      }
+      // Drawer mobile là dialog modal: Tab / Shift+Tab chỉ đi vòng trong drawer.
+      if (e.key === "Tab" && isMobile && tocOpen && tocAsideRef.current) {
+        const items = [...tocAsideRef.current.querySelectorAll(
+          'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        const inside = tocAsideRef.current.contains(document.activeElement);
+        if (e.shiftKey && (!inside || document.activeElement === first)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && (!inside || document.activeElement === last)) { e.preventDefault(); first.focus(); }
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
@@ -494,7 +534,11 @@ function OutputScreen({
 
   const pickFromToc = (c) => {
     go(c);
-    if (isMobile) setTocOpen(false);
+    if (isMobile) {
+      setTocOpen(false);
+      // Mục vừa bấm sắp bị ẩn → đưa focus sang vùng đọc (đọc tiếp được bằng phím ngay).
+      scrollRef.current?.focus({ preventScroll: true });
+    }
   };
 
   const toggleToc = () => setTocOpen(o => !o);
@@ -622,7 +666,7 @@ function OutputScreen({
 
       {/* Mục lục: cột trái trên desktop, drawer trên mobile */}
       <div className="rd-toc-scrim" onClick={closeToc} aria-hidden="true" />
-      <aside className="rd-toc" id="rd-toc" aria-label="Mục lục chương"
+      <aside className="rd-toc" id="rd-toc" ref={tocAsideRef} aria-label="Mục lục chương"
         role={isMobile ? "dialog" : undefined} aria-modal={isMobile && tocOpen ? "true" : undefined}
         aria-hidden={!tocOpen ? "true" : undefined}>
         <div className="rd-toc-h">
