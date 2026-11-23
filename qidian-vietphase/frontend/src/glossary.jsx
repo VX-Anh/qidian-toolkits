@@ -32,9 +32,10 @@ function GlossaryScreen({ glossary, status = "ready", onReload, onAdd, onEdit, o
     setEditing(it);
     setEz(it.zh || ""); setEv(it.vi || ""); setEn(it.notes || "");
   }
-  function saveEdit() {
-    onEdit(cat, editing, { zh: ez.trim(), vi: ev.trim(), notes: en.trim() });
-    setEditing(null);
+  async function saveEdit() {
+    // Chỉ đóng trình sửa khi lưu xong; lỗi (vd đang dịch, 409) giữ nguyên bản nháp.
+    const ok = await onEdit(cat, editing, { zh: ez.trim(), vi: ev.trim(), notes: en.trim() });
+    if (ok !== false) setEditing(null);
   }
   const isEditing = (it) =>
     editing && editing.zh === it.zh && editing.vi === it.vi && editing.notes === it.notes;

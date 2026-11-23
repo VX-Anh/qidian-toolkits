@@ -200,6 +200,12 @@ class NameCheckTest(unittest.TestCase):
         r = check_and_fix("裴天罡来到裴天刚山。", "Hắn đến Bùi Thiên Cang Sơn.", self.p)
         self.assertEqual(r.text, "Hắn đến Bùi Thiên Cang Sơn.")
 
+    def test_variant_step_does_not_touch_other_glossary_name(self):
+        from backend.agent.novel_loader import Term
+        self.p.places.append(Term("司奇山", "Tư Kì Sơn"))
+        r = check_and_fix("司奇来了。", "Tư Kì Sơn ở phía xa. Tư Kỳ tới.", self.p)
+        self.assertEqual(r.text, "Tư Kì Sơn ở phía xa. Tư Kỳ tới.")
+
     def test_single_syllable_name_never_autofixed(self):
         from backend.agent.novel_loader import Term
         self.p.characters.append(Term("安", "An"))
@@ -302,6 +308,18 @@ class RenameTest(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 409)
         self.assertEqual(self.files[0].read_text(encoding="utf-8"), "Người dùng sửa tiếp.")
         self.assertEqual(self.files[2].read_text(encoding="utf-8"), "Tư Kì Sơn khác. Tư Kì.")
+
+    def test_undo_incomplete_backup_changes_nothing(self):
+        from fastapi import HTTPException
+        n = self.names
+        r = n.rename_apply("t", n.RenameRequest(old_vi="Tư Kỳ", new_vi="Tư Kì"))
+        bdir = self.out / ".name-backups" / "t" / r["backup_id"]
+        (bdir / "0001.txt").unlink()
+        with self.assertRaises(HTTPException) as cm:
+            n.rename_undo("t", n.UndoRequest(backup_id=r["backup_id"]))
+        self.assertEqual(cm.exception.status_code, 409)
+        self.assertEqual(self.files[0].read_text(encoding="utf-8"), "Tư Kì nói. Tư Kì cười.")
+        self.assertTrue((bdir / "manifest.json").is_file())
 
     def test_rename_pins_changed_reading_without_section(self):
         n = self.names

@@ -27,7 +27,7 @@ from ..agent.state import ChapterStatus
 from ..config import settings
 from ..safety import check_request_params, check_slug
 from ..shared import get_state
-from .translate import novel_busy
+from .translate import novel_busy, novel_files_lock
 
 router = APIRouter(prefix="/api/names", tags=["names"], dependencies=[Depends(check_request_params)])
 
@@ -168,7 +168,7 @@ async def check_all(slug: str):
     check_slug(slug)
     profile = _profile(slug)
     fixed = issues = checked = 0
-    with novel_busy(slug, "kiểm tên riêng"):
+    with novel_busy(slug, "kiểm tên riêng"), novel_files_lock(slug):
         for c in _done_chapters(slug):
             res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
             if res is None:
@@ -205,7 +205,7 @@ def rename_apply(slug: str, req: RenameRequest):
     """Đổi tên trong bản dịch + bảng thuật ngữ + âm đã chốt, một giao dịch có sao lưu."""
     check_slug(slug)
     old, new = _check_names(req.old_vi, req.new_vi)
-    with novel_busy(slug, "đổi tên riêng"):
+    with novel_busy(slug, "đổi tên riêng"), novel_files_lock(slug):
         protected = _longer_names(slug, old)
         backup_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
         bdir = _backup_root(slug) / backup_id
@@ -255,10 +255,16 @@ def rename_apply(slug: str, req: RenameRequest):
 
 @router.post("/{slug}/rename/undo")
 def rename_undo(slug: str, req: UndoRequest):
+    """Khôi phục bản sao lưu của một lần đổi tên — tất cả hoặc không gì.
+
+    Từ chối (409) nếu bất kỳ file nào đã đổi sau lần đổi tên. Kiểm hash và khôi phục chạy
+    trong cùng khoá (khoá file của truyện + khoá novel.md) nên không có lần lưu nào chen vào.
+    Lỗi giữa chừng → trả các file đã ghi về như trước khi hoàn tác; sao lưu chỉ xoá khi xong.
+    """
     check_slug(slug)
     if not _BACKUP_ID.match(req.backup_id):
         raise HTTPException(400, "backup_id không hợp lệ")
-    with novel_busy(slug, "hoàn tác đổi tên"):
+    with novel_busy(slug, "hoàn tác đổi tên"), novel_files_lock(slug), NOVEL_MD_LOCK:
         bdir = _backup_root(slug) / req.backup_id
         mf = bdir / "manifest.json"
         if not mf.is_file():
@@ -266,28 +272,43 @@ def rename_undo(slug: str, req: UndoRequest):
         manifest = json.loads(mf.read_text(encoding="utf-8"))
         out_root = (settings.output_dir / slug).resolve()
         md_path = settings.rules_dir / slug / "novel.md"
-        # Có thay đổi sau lần đổi tên (sửa bản dịch, dịch lại, sửa bảng…) → không đè, báo 409.
-        changed_after = []
-        for f in manifest.get("files", []):
-            dst = Path(f["path"])
-            if not dst.is_file() or _sha(dst.read_bytes()) != f.get("after"):
-                changed_after.append(dst.name)
-        if manifest.get("novel_md") and (not md_path.is_file()
-                                         or _sha(md_path.read_bytes()) != manifest.get("novel_md_after")):
-            changed_after.append("novel.md")
-        if changed_after:
-            raise HTTPException(409, "Không hoàn tác được: đã có thay đổi sau lần đổi tên ở "
-                                     + ", ".join(changed_after[:5]))
-        restored = 0
+
+        # 1. Lập kế hoạch + kiểm đủ mọi thứ TRƯỚC khi ghi.
+        plan: list[tuple[Path, Path, str | None]] = []   # (đích, nguồn sao lưu, hash sau đổi tên)
         for f in manifest.get("files", []):
             dst = Path(f["path"]).resolve()
             src = bdir / Path(f["backup"]).name
-            if dst.is_relative_to(out_root) and src.is_file():
-                shutil.copy2(src, dst)
-                restored += 1
-        if manifest.get("novel_md") and (bdir / "novel.md").is_file():
-            with NOVEL_MD_LOCK:
-                write_novel_md(settings.rules_dir / slug / "novel.md",
-                               (bdir / "novel.md").read_text(encoding="utf-8"))
+            if not dst.is_relative_to(out_root) or not src.is_file():
+                raise HTTPException(409, "Bản sao lưu không đầy đủ hoặc đường dẫn không hợp lệ")
+            plan.append((dst, src, f.get("after")))
+        if manifest.get("novel_md"):
+            if not (bdir / "novel.md").is_file():
+                raise HTTPException(409, "Bản sao lưu thiếu novel.md")
+            plan.append((md_path, bdir / "novel.md", manifest.get("novel_md_after")))
+        changed_after = [dst.name for dst, _, after in plan
+                         if not after or not dst.is_file() or _sha(dst.read_bytes()) != after]
+        if changed_after:
+            raise HTTPException(409, "Không hoàn tác được: đã có thay đổi sau lần đổi tên ở "
+                                     + ", ".join(changed_after[:5]))
+
+        # 2. Ghi (tmp + replace từng file); lỗi → trả các file đã ghi về nội dung hiện tại.
+        current = {dst: dst.read_bytes() for dst, _, _ in plan}
+        written: list[Path] = []
+        try:
+            for dst, src, _ in plan:
+                tmp = dst.with_name(dst.name + ".undo.tmp")
+                tmp.write_bytes(src.read_bytes())
+                tmp.replace(dst)
+                written.append(dst)
+        except OSError as exc:
+            for dst in written:
+                try:
+                    tmp = dst.with_name(dst.name + ".undo.tmp")
+                    tmp.write_bytes(current[dst])
+                    tmp.replace(dst)
+                except OSError:
+                    pass
+            raise HTTPException(500, f"Hoàn tác lỗi, đã trả lại như trước: {exc}") from exc
         shutil.rmtree(bdir, ignore_errors=True)
-    return {"restored": restored, "novel_md": bool(manifest.get("novel_md"))}
+    files = sum(1 for dst, _, _ in plan if dst != md_path)
+    return {"restored": files, "novel_md": bool(manifest.get("novel_md"))}

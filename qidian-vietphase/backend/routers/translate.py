@@ -47,6 +47,16 @@ def _add_job(slug: str, job_id: str, eq, coro) -> None:
         jobs.add(job_id, eq, task, novel_slug=slug, kind="translate")
 
 
+_FILE_LOCKS: dict[str, threading.RLock] = {}
+
+
+def novel_files_lock(slug: str) -> threading.RLock:
+    """Khoá ghi file bản dịch/bản gốc của một truyện: đổi tên/hoàn tác giữ suốt thao tác,
+    lưu tay một chương giữ khi ghi — lần lưu tay không chen giữa đọc–ghi–hash của đổi tên."""
+    with _BUSY_LOCK:
+        return _FILE_LOCKS.setdefault(slug, threading.RLock())
+
+
 @contextmanager
 def novel_busy(slug: str, what: str):
     """Giữ truyện ở trạng thái bận suốt một thao tác ghi tên riêng (409 nếu đang dịch)."""

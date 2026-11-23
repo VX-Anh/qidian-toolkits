@@ -207,5 +207,7 @@ def save_output(filename: str, content: str = Body(..., embed=True)):
     path = Path(chapter["translated_path"])
     if not path.exists():
         raise HTTPException(404, "File output không tồn tại")
-    path.write_bytes(content.encode("utf-8"))
+    from .translate import novel_files_lock
+    with novel_files_lock(chapter.get("novel_slug") or ""):
+        path.write_bytes(content.encode("utf-8"))
     return {"ok": True}

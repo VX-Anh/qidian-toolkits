@@ -758,60 +758,68 @@ function App() {
   // ── Glossary edit / delete ───────────────────────────────────────────
   const glossRow = (it) => `| ${it.zh} | ${it.vi} | ${it.notes || ""} |`;
 
+  // Trả true khi lưu xong (trình sửa đóng), false khi lỗi/huỷ (giữ bản nháp).
   async function onEditGloss(cat, oldItem, newItem) {
-    if (!currentSlug) return;
+    if (!currentSlug) return false;
     if (!newItem.zh || !newItem.vi) {
       setToast({ msg: "Cần nhập cả tiếng Trung và tiếng Việt", type: "error" });
-      return;
+      return false;
     }
+    const slug = currentSlug;
+    const oldVi = (oldItem.vi || "").trim();
+    const newVi = newItem.vi.trim();
+    const renaming = !!oldVi && oldVi !== newVi;
     try {
-      // Đổi tên Việt: hỏi áp dụng cho các chương đã dịch TRƯỚC. Máy chủ đổi tên trong bản
-      // dịch + bảng thuật ngữ + âm đã chốt trong một lần có sao lưu (hoàn tác trả đủ cả ba).
-      let base = oldItem;
-      if (oldItem.vi && oldItem.vi.trim() !== newItem.vi.trim()) {
-        const applied = await offerRenameInChapters(oldItem.vi.trim(), newItem.vi.trim());
-        if (applied) base = { ...oldItem, vi: newItem.vi.trim() };
+      // Đổi tên Việt: hỏi trước. Đồng ý → (1) lưu phần khác của dòng (chữ Hán, ghi chú) với
+      // tên CŨ, rồi (2) máy chủ đổi tên trong bản dịch + bảng + âm đã chốt trong MỘT lần có
+      // sao lưu — hash sau cùng khớp, hoàn tác được. Từ chối → chỉ sửa dòng trong bảng.
+      let apply = false;
+      if (renaming) {
+        const pv = await previewRename(slug, oldVi, newVi);
+        apply = pv.total ? confirmRename(pv, oldVi, newVi) : true;
       }
-      const rawData = await api.get(`/api/novels/${currentSlug}/raw`);
-      const oldRow = glossRow(base).trim();
-      const newRow = glossRow(newItem);
-      if (oldRow !== newRow.trim()) {
-        const lines = rawData.content.split("\n");
-        const idx = lines.findIndex(l => l.trim() === oldRow);
-        if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
-        lines[idx] = newRow;
-        await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content: lines.join("\n"), version: rawData.version });
+      const target = apply ? { ...newItem, vi: oldVi } : newItem;
+      await replaceGlossRow(slug, oldItem, target);
+      if (apply) {
+        const r = await api.post(`/api/names/${encodeURIComponent(slug)}/rename/apply`,
+                                 { old_vi: oldVi, new_vi: newVi });
+        if (r.files) setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
+        await loadChapters(slug);
       }
-      await loadGlossary(currentSlug);
-      await loadNovelMd(currentSlug);
-      setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
+      await loadGlossary(slug);
+      await loadNovelMd(slug);
+      if (!apply || !renaming) setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
+      return true;
     } catch (err) {
+      await loadGlossary(slug).catch(() => {});
       setToast({ msg: `Lỗi sửa thuật ngữ: ${err.message}`, type: "error" });
+      return false;
     }
   }
 
-  // Đổi tên Việt trong bảng → máy chủ đổi trong bản dịch + bảng thuật ngữ + âm đã chốt
-  // (một lần, có sao lưu). Chưa chương nào dùng tên cũ thì đổi luôn, không hỏi.
-  // Trả true nếu máy chủ đã đổi dòng trong bảng, false nếu người dùng từ chối;
-  // lỗi (vd 409 đang dịch) được ném ra để KHÔNG lưu bảng lệch với bản dịch.
-  async function offerRenameInChapters(oldVi, newVi) {
-    const slug = currentSlug;
-    const base = `/api/names/${encodeURIComponent(slug)}/rename`;
-    const pv = await api.post(`${base}/preview`, { old_vi: oldVi, new_vi: newVi });
-    if (pv.total) {
-      const list = pv.chapters.slice(0, 8).map(c => `• Chương ${c.chapter_num}: ${c.count} chỗ`).join("\n");
-      const more = pv.chapters.length > 8 ? `\n… và ${pv.chapters.length - 8} chương khác` : "";
-      const keep = pv.protected?.length ? `\n\nGiữ nguyên trong tên dài hơn: ${pv.protected.join(", ")}` : "";
-      if (!window.confirm(
-        `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}${keep}\n\nBản dịch cũ được sao lưu trên máy chủ.`
-      )) return false;
-    }
-    const r = await api.post(`${base}/apply`, { old_vi: oldVi, new_vi: newVi });
-    if (r.files) {
-      await loadChapters(slug);
-      setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
-    }
-    return !!r.glossary_rows;
+  async function replaceGlossRow(slug, oldItem, newItem) {
+    const oldRow = glossRow(oldItem).trim();
+    const newRow = glossRow(newItem);
+    if (oldRow === newRow.trim()) return;
+    const rawData = await api.get(`/api/novels/${slug}/raw`);
+    const lines = rawData.content.split("\n");
+    const idx = lines.findIndex(l => l.trim() === oldRow);
+    if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
+    lines[idx] = newRow;
+    await api.put(`/api/novels/${encodeURIComponent(slug)}/raw`, { content: lines.join("\n"), version: rawData.version });
+  }
+
+  function previewRename(slug, oldVi, newVi) {
+    return api.post(`/api/names/${encodeURIComponent(slug)}/rename/preview`, { old_vi: oldVi, new_vi: newVi });
+  }
+
+  function confirmRename(pv, oldVi, newVi) {
+    const list = pv.chapters.slice(0, 8).map(c => `• Chương ${c.chapter_num}: ${c.count} chỗ`).join("\n");
+    const more = pv.chapters.length > 8 ? `\n… và ${pv.chapters.length - 8} chương khác` : "";
+    const keep = pv.protected?.length ? `\n\nGiữ nguyên trong tên dài hơn: ${pv.protected.join(", ")}` : "";
+    return window.confirm(
+      `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}${keep}\n\nBản dịch cũ được sao lưu trên máy chủ. Chọn Huỷ để chỉ sửa trong bảng thuật ngữ.`
+    );
   }
 
   // Kiểm + tự sửa tên riêng cho mọi chương đã dịch của truyện.

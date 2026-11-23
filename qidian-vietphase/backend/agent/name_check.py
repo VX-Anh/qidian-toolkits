@@ -77,9 +77,23 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
     res = CheckResult(text=translated)
     present = present_terms(raw, profile)
     canon = {_nfc(t.vi) for t in present}
+    all_names = {_nfc(t.vi) for t in profile.all_terms() if t.vi and is_name_like(t.vi)}
+    # Gần-giống tính trên TOÀN bảng: biến thể gần 2 tên (dù tên kia không có trong chương)
+    # là mơ hồ, không sửa.
     by_fold: dict[str, set[str]] = {}
-    for vi in canon:
+    for vi in all_names | canon:
         by_fold.setdefault(fold(vi), set()).add(vi)
+
+    def name_spans(body: str) -> list[tuple[int, int]]:
+        # Vị trí đang là đúng một tên chuẩn trong bảng (vd "Bùi Thiên Cang Sơn", "Tư Kì Sơn"):
+        # không lấy cụm con của nó làm ứng viên, không thay bên trong nó.
+        return [(m.start(), m.end()) for v in all_names
+                for m in re.finditer(rf"(?<!\w){re.escape(v)}(?!\w)", body)]
+
+    def inside(a: int, b: int, spans: list[tuple[int, int]]) -> bool:
+        return any(a < e and s < b for s, e in spans)
+
+    spans0 = name_spans(translated)
     # Tên 1 âm tiết không tự sửa: chữ đầu câu viết hoa + bỏ dấu dễ trùng từ thường
     # ("Ăn" ~ "An").
     lengths = sorted({k for k in (len(syllables(v)) for v in canon) if k >= 2}, reverse=True)
@@ -95,9 +109,11 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
                     continue
                 start, end = run[i].start(), run[i + n - 1].end()
                 found = translated[start:end]
-                if found in canon:
+                if found in canon or found in all_names:
                     hit = (n, None)
                     break
+                if inside(start, end, spans0):
+                    continue
                 cands = by_fold.get(fold(" ".join(m.group(0) for m in run[i:i + n])))
                 if cands:
                     hit = (n, (start, end, found, cands))
@@ -109,7 +125,9 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
             if info:
                 start, end, found, cands = info
                 if len(cands) == 1:
-                    edits.append((start, end, found, next(iter(cands))))
+                    target = next(iter(cands))
+                    if target in canon:   # chỉ sửa về tên thật sự có trong bản gốc chương
+                        edits.append((start, end, found, target))
                 else:
                     res.issues.append({"kind": "ambiguous", "found": found,
                                        "detail": f"«{found}» gần với nhiều tên: {', '.join(sorted(cands))}"})
@@ -125,8 +143,6 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
     # đầu (vd "Bùi Thiên Cang" ↔ "Bùi Thiên Cương") → cùng người, sửa — chỉ khi khớp duy
     # nhất theo CẢ HAI chiều: tên đích có đúng một cụm ứng viên, và cụm đó không gần tên
     # nào khác trong bảng. Tên 2 âm tiết chỉ báo (dễ nhầm người cùng họ).
-    all_names = {_nfc(t.vi) for t in profile.all_terms() if t.vi and is_name_like(t.vi)}
-
     def near(words: list[str], target: list[str]) -> bool:
         same = sum(fold(a) == fold(b) for a, b in zip(words, target))
         # Âm đầu (họ / chữ đầu tên) phải trùng: "Hứa Tư Lê" không phải "Tiêu Tứ Lê".
@@ -134,15 +150,6 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
 
     def has(vi: str, body: str) -> bool:
         return bool(re.search(rf"(?<!\w){re.escape(vi)}(?!\w)", body, re.IGNORECASE))
-
-    def name_spans(body: str) -> list[tuple[int, int]]:
-        # Vị trí đang là đúng một tên chuẩn trong bảng (vd "Bùi Thiên Cang Sơn"): không lấy
-        # cụm con của nó làm ứng viên, không thay bên trong nó.
-        return [(m.start(), m.end()) for v in all_names
-                for m in re.finditer(rf"(?<!\w){re.escape(v)}(?!\w)", body)]
-
-    def inside(a: int, b: int, spans: list[tuple[int, int]]) -> bool:
-        return any(a < e and s < b for s, e in spans)
 
     targets = [_nfc(t.vi) for t in present
                if len(syllables(t.vi)) >= 3 and not has(_nfc(t.vi), text)]
