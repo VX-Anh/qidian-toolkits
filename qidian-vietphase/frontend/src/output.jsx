@@ -355,7 +355,9 @@ function OutputScreen({
     contentRevRef.current++;
     // Nội dung đổi → giữ nguyên vị trí cuộn hiện tại (không nhảy về đầu chương).
     const box = scrollRef.current;
-    if (box && text !== content) restoreRef.current = { filename, keepTop: box.scrollTop };
+    // Chỉ chụp khi nội dung đang hiện; vị trí đã nhớ đang chờ khôi phục (GET chưa xong) thì giữ nguyên.
+    const pending = restoreRef.current && restoreRef.current.filename === filename;
+    if (box && view.phase !== "loading" && !pending && text !== content) restoreRef.current = { filename, keepTop: box.scrollTop };
     setLoadRes({ key: loadKey, content: text, error: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedOutput]);
