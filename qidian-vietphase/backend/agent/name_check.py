@@ -14,7 +14,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .hanviet import fold, has_han, is_name_like, syllables
+from .hanviet import fold, has_han, is_name_like, same_name, soft, syllables
 from .novel_loader import NovelProfile
 
 _WORD = re.compile(r"\w+")
@@ -81,8 +81,10 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
     # Gần-giống tính trên TOÀN bảng: biến thể gần 2 tên (dù tên kia không có trong chương)
     # là mơ hồ, không sửa.
     by_fold: dict[str, set[str]] = {}
+    by_soft: dict[str, set[str]] = {}
     for vi in all_names | canon:
         by_fold.setdefault(fold(vi), set()).add(vi)
+        by_soft.setdefault(soft(vi), set()).add(vi)
 
     def name_spans(body: str) -> list[tuple[int, int]]:
         # Vị trí đang là đúng một tên chuẩn trong bảng (vd "Bùi Thiên Cang Sơn", "Tư Kì Sơn"):
@@ -114,7 +116,11 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
                     break
                 if inside(start, end, spans0):
                     continue
-                cands = by_fold.get(fold(" ".join(m.group(0) for m in run[i:i + n])))
+                phrase = " ".join(m.group(0) for m in run[i:i + n])
+                # Có dấu: chỉ coi khác i/y là biến thể (giữ thanh: "Thành" ≠ "Thanh").
+                # Không dấu hoàn toàn ("Tu Ky"): so sau khi bỏ dấu.
+                cands = (by_fold.get(fold(phrase)) if phrase.isascii()
+                         else by_soft.get(soft(phrase)))
                 if cands:
                     hit = (n, (start, end, found, cands))
                     break
@@ -144,9 +150,9 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
     # nhất theo CẢ HAI chiều: tên đích có đúng một cụm ứng viên, và cụm đó không gần tên
     # nào khác trong bảng. Tên 2 âm tiết chỉ báo (dễ nhầm người cùng họ).
     def near(words: list[str], target: list[str]) -> bool:
-        same = sum(fold(a) == fold(b) for a, b in zip(words, target))
+        same = sum(same_name(a, b) for a, b in zip(words, target))
         # Âm đầu (họ / chữ đầu tên) phải trùng: "Hứa Tư Lê" không phải "Tiêu Tứ Lê".
-        return len(words) == len(target) and same == len(target) - 1 and fold(words[0]) == fold(target[0])
+        return len(words) == len(target) and same == len(target) - 1 and same_name(words[0], target[0])
 
     def has(vi: str, body: str) -> bool:
         return bool(re.search(rf"(?<!\w){re.escape(vi)}(?!\w)", body, re.IGNORECASE))

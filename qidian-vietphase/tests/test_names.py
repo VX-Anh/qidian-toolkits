@@ -206,6 +206,13 @@ class NameCheckTest(unittest.TestCase):
         r = check_and_fix("司奇来了。", "Tư Kì Sơn ở phía xa. Tư Kỳ tới.", self.p)
         self.assertEqual(r.text, "Tư Kì Sơn ở phía xa. Tư Kỳ tới.")
 
+    def test_tone_difference_is_a_different_name(self):
+        from backend.agent.novel_loader import Term
+        self.p.characters.append(Term("李诚", "Lý Thành"))
+        r = check_and_fix("李诚来了。", "Lý Thanh nói. Lí Thành cười. Ly Thanh đi.", self.p)
+        # "Lý Thanh" khác thanh → không sửa; "Lí Thành" (i/y) và "Ly Thanh" (không dấu) → sửa.
+        self.assertEqual(r.text, "Lý Thanh nói. Lý Thành cười. Lý Thành đi.")
+
     def test_single_syllable_name_never_autofixed(self):
         from backend.agent.novel_loader import Term
         self.p.characters.append(Term("安", "An"))

@@ -52,6 +52,21 @@ def fold(s: str) -> str:
     return s.replace("y", "i")
 
 
+def soft(s: str) -> str:
+    """Chuẩn hoá giữ dấu thanh: thường + y→i ("Kỳ" ~ "Kì"), NFC. Khác thanh là KHÁC tên
+    ("Thành" ≠ "Thanh")."""
+    s = unicodedata.normalize("NFD", s.lower()).replace("y", "i")
+    return unicodedata.normalize("NFC", s)
+
+
+def same_name(a: str, b: str) -> bool:
+    """Hai cách viết của cùng một tên/âm: giống nhau sau soft(); hoặc một bên viết hoàn
+    toàn không dấu ("Tu Ky") và giống nhau sau khi bỏ dấu."""
+    if soft(a) == soft(b):
+        return True
+    return (a.isascii() or b.isascii()) and fold(a) == fold(b)
+
+
 def title_syllable(s: str) -> str:
     return s[:1].upper() + s[1:] if s else s
 
