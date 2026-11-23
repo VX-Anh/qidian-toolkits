@@ -69,6 +69,11 @@ const vendor = [
   `<script src="/static/dist/vendor/react.production.min.js?v=${ver("vendor/react.production.min.js")}"></script>`,
   `<script src="/static/dist/vendor/react-dom.production.min.js?v=${ver("vendor/react-dom.production.min.js")}"></script>`,
 ].join("\n  ");
+// CSS + script tĩnh nạp thẳng từ frontend/: gắn ?v=<hash> để bản deploy mới không chạy
+// với CSS cũ còn trong cache trình duyệt/Cloudflare (Cache-Control max-age 4 giờ).
+const srcVer = (f) => createHash("sha256").update(readFileSync(join(here, f))).digest("hex").slice(0, 10);
+out = out.replace(/(<(?:link rel="stylesheet" href|script src)=")\/static\/((?!dist\/)[^"?]+\.(?:css|js))"/g,
+  (_, pre, f) => `${pre}/static/${f}?v=${srcVer(f)}"`);
 out = out
   .replace('<div id="root"></div>', `<div id="root"></div>\n\n  ${vendor}`)
   .replace("</body>", `  <script src="/static/dist/app.js?v=${ver("app.js")}"></script>\n</body>`);
