@@ -35,11 +35,9 @@ RUN uv sync --frozen --no-dev
 
 # Chạy non-root: tạo user 'app' và trao quyền /app cho nó.
 # Entrypoint (root) chown /data bind mount rồi exec runuser → app (xem docker-entrypoint.sh).
+# runuser (util-linux) đã có sẵn trong python:*-slim → không cần apt-get.
 RUN useradd --create-home --uid 10001 app \
-    && chown -R app:app /app \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends util-linux \
-    && rm -rf /var/lib/apt/lists/*
+    && chown -R app:app /app
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
