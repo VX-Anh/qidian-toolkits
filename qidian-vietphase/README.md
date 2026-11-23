@@ -1,12 +1,14 @@
 # VietPhase
 
-Agent dịch tiểu thuyết Trung → Việt, đa agent chạy song song (FastAPI + OpenAI).
+Agent dịch tiểu thuyết Trung → Việt, đa agent chạy song song (FastAPI + Gemini trên Vertex AI).
+Kèm OCR (PaddleOCR offline hoặc Gemini vision), Story-Wiki và bảng thuật ngữ.
 
 ## Yêu cầu
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/)
-- OpenAI API key
+- Project GCP đã bật Vertex AI (đăng nhập bằng `gcloud auth application-default login`
+  hoặc service-account JSON qua `GOOGLE_APPLICATION_CREDENTIALS`)
 
 ## Cài đặt
 
@@ -16,16 +18,19 @@ uv sync
 
 ## Cấu hình
 
-Copy `.env.example` → `.env` rồi điền:
+Copy `.env.example` → `.env` rồi điền (danh sách đầy đủ xem trong `.env.example`):
 
-| Biến             | Ý nghĩa                                          |
-| ---------------- | ------------------------------------------------ |
-| `OPENAI_API_KEY` | API key OpenAI                                   |
-| `OPENAI_MODEL`   | Model dùng để dịch (mặc định `gpt-4o`)           |
-| `INPUT_DIR`      | Thư mục chứa file `.txt` chương tiếng Trung      |
-| `OUTPUT_DIR`     | Thư mục lưu bản dịch                             |
-| `RULES_DIR`      | Thư mục cấu hình truyện (mặc định `rules`)       |
-| `CONCURRENCY`    | Số TranslatorAgent chạy song song (mặc định `3`) |
+| Biến                    | Ý nghĩa                                              |
+| ----------------------- | ---------------------------------------------------- |
+| `GOOGLE_CLOUD_PROJECT`  | GCP project id (Vertex AI)                           |
+| `GOOGLE_CLOUD_LOCATION` | Mặc định `global`                                    |
+| `GEMINI_MODEL`          | Model dịch (mặc định `gemini-3.5-flash`)             |
+| `THINKING_LEVEL`        | `LOW` (mặc định) / `MEDIUM` / `HIGH` / `MINIMAL`     |
+| `INPUT_DIR`             | Thư mục chứa file `.txt` chương tiếng Trung          |
+| `OUTPUT_DIR`            | Thư mục lưu bản dịch                                 |
+| `RULES_DIR`             | Thư mục cấu hình truyện (mặc định `rules`)           |
+| `CONCURRENCY`           | Số TranslatorAgent chạy song song (mặc định `3`)     |
+| `OCR_DEFAULT_ENGINE`    | `paddle` (offline, miễn phí) hoặc `gemini`           |
 
 File chương đặt tên theo dạng `第675章 天演.txt` (số chương nằm trong tên file).
 

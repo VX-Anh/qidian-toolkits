@@ -32,3 +32,16 @@ qidian-vietphase/secrets/*
 # Native messaging host manifest — sinh ra lúc cài đặt (install.ps1), chứa
 # Extension ID + đường dẫn tuyệt đối riêng của từng máy
 qidian-extension/native-host/com.qidian.screenshot_host.json
+
+# Dữ liệu truyện (bản gốc, ảnh chụp, bản dịch) — nội dung có bản quyền, chỉ giữ ở máy
+data/
+qidian-ocr/dataset/
+qidian-scraper/chapter.txt
+qidian-scraper/page_dump.html
+qidian-scraper/第*.txt
+qd_profile/
+
+# SQLite state của app
+**/backend/db/*.db
+*.db-wal
+*.db-shm
