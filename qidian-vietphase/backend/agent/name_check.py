@@ -135,9 +135,19 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
     def has(vi: str, body: str) -> bool:
         return bool(re.search(rf"(?<!\w){re.escape(vi)}(?!\w)", body, re.IGNORECASE))
 
+    def name_spans(body: str) -> list[tuple[int, int]]:
+        # Vị trí đang là đúng một tên chuẩn trong bảng (vd "Bùi Thiên Cang Sơn"): không lấy
+        # cụm con của nó làm ứng viên, không thay bên trong nó.
+        return [(m.start(), m.end()) for v in all_names
+                for m in re.finditer(rf"(?<!\w){re.escape(v)}(?!\w)", body)]
+
+    def inside(a: int, b: int, spans: list[tuple[int, int]]) -> bool:
+        return any(a < e and s < b for s, e in spans)
+
     targets = [_nfc(t.vi) for t in present
                if len(syllables(t.vi)) >= 3 and not has(_nfc(t.vi), text)]
     runs = _runs(text)
+    spans = name_spans(text)
     cand_of: dict[str, set[str]] = {}
     for vi in targets:
         tgt = syllables(vi)
@@ -146,7 +156,7 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
             for i in range(len(run) - n + 1):
                 words = [m.group(0) for m in run[i:i + n]]
                 phrase = " ".join(words)
-                if phrase in all_names or any(v in phrase for v in canon):
+                if phrase in all_names or inside(run[i].start(), run[i + n - 1].end(), spans):
                     continue
                 if near(words, tgt):
                     cand_of.setdefault(vi, set()).add(phrase)
@@ -159,7 +169,16 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
             res.issues.append({"kind": "ambiguous", "found": found,
                                "detail": f"«{found}» gần nhiều tên trong bảng, không tự sửa"})
             continue
-        text, k = re.subn(rf"(?<!\w){re.escape(found)}(?!\w)", vi, text)
+        protect = name_spans(text)
+        k = 0
+
+        def sub(m: re.Match, vi: str = vi) -> str:
+            nonlocal k
+            if inside(m.start(), m.end(), protect):
+                return m.group(0)
+            k += 1
+            return vi
+        text = re.sub(rf"(?<!\w){re.escape(found)}(?!\w)", sub, text)
         if k:
             res.fixes.append({"found": found, "expected": vi, "count": k})
     res.text = text

@@ -11,6 +11,7 @@ Chữ mới gặp lần đầu → âm model chọn được ghi vào mục "Âm
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,8 +37,11 @@ _MAX_NEW_READINGS = 40
 # Hư từ, đại từ, trợ từ: gần như không có trong danh từ riêng. Mục chứa các chữ này bị loại
 # (chặn kiểu 为什么 → "tên người").
 _STOP_CHARS = set("的了么吗呢吧啊呀哦嘛们什怎谁哪这那你我她它您咱俺些么样很都也就还又再没却")
-# Âm tiết tiếng Việt hợp lệ về hình thức: chữ cái Việt, 1–7 ký tự.
-_VI_SYL = re.compile(r"^[A-Za-zÀ-ỹĐđ]{1,7}$")
+# Âm tiết tiếng Việt hợp lệ về hình thức: chỉ chữ cái tiếng Việt (không f j w z, không chữ
+# Cyrillic/Hy Lạp… lọt qua khoảng Unicode rộng), 1–7 ký tự, đã NFC.
+_VI_LOWER = ("abcdeghiklmnopqrstuvxy"
+             "àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ")
+_VI_SYL = re.compile("^[" + _VI_LOWER + _VI_LOWER.upper() + "]{1,7}$")
 
 SYSTEM = """Bạn là chuyên gia tên riêng trong tiểu thuyết {genre} Trung → Việt.
 Nhiệm vụ: đọc một chương tiếng Trung và liệt kê MỌI danh từ riêng CHƯA có trong danh sách
@@ -112,7 +116,7 @@ def normalize(raw: str, profile: NovelProfile, items, chapter_num: int) -> tuple
             continue   # sai loại, đã có, chữ đơn, không phải toàn chữ Hán, hoặc không có trong chương
         if _STOP_CHARS & set(zh):
             continue   # chứa hư từ/đại từ: không phải danh từ riêng
-        sy = syllables(vi)
+        sy = syllables(unicodedata.normalize("NFC", vi))
         if not sy or len(sy) > 2 * len(zh) + 2 or not all(_VI_SYL.match(s) for s in sy):
             continue   # không phải tên Việt hợp lệ (ký tự lạ, quá dài so với số chữ Hán)
         vi = " ".join(title_syllable(s) for s in sy)

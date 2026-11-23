@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -82,17 +83,25 @@ def _pattern(old: str) -> re.Pattern:
     return re.compile(rf"(?<!\w){re.escape(old)}(?!\w)")
 
 
+def _nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def _longer_names(slug: str, old: str) -> list[str]:
     """Tên chuẩn khác trong bảng có chứa tên cũ (vd "Lâm An Thành" khi đổi "Lâm An")."""
     pat = _pattern(old)
-    return sorted({t.vi for t in _profile(slug).all_terms()
-                   if t.vi and t.vi != old and pat.search(t.vi)}, key=len, reverse=True)
+    names = {_nfc(t.vi) for t in _profile(slug).all_terms() if t.vi}
+    return sorted({v for v in names if v != old and pat.search(v)}, key=len, reverse=True)
 
 
 def _replace(text: str, old: str, new: str, protected: list[str]) -> tuple[str, int]:
     """Thay tên cũ trừ các lần nằm trong một tên chuẩn dài hơn (giữ tên đó khớp bảng)."""
-    text = unicodedata.normalize("NFC", text)
-    spans = [(m.start(), m.end()) for vi in protected for m in _pattern(vi).finditer(text)]
+    text = _nfc(text)
+    spans = [(m.start(), m.end()) for vi in protected for m in _pattern(_nfc(vi)).finditer(text)]
     n = 0
 
     def sub(m: re.Match) -> str:
@@ -105,24 +114,34 @@ def _replace(text: str, old: str, new: str, protected: list[str]) -> tuple[str, 
     return _pattern(old).sub(sub, text), n
 
 
-def _update_readings(md: str, zhs: list[str], new: str) -> str:
-    """Tên phiên âm từng chữ đổi âm → cập nhật các chữ đã chốt trong mục Âm Hán-Việt
-    (không thì bước dò tên vẫn ép âm cũ cho tên sau)."""
-    sy = syllables(new)
+def _update_readings(md: str, zhs: list[str], old: str, new: str) -> str:
+    """Tên phiên âm từng chữ đổi âm → chốt âm MỚI của đúng các chữ đổi âm trong mục
+    Âm Hán-Việt (sửa dòng có sẵn, thêm dòng thiếu, tạo mục nếu chưa có). Không thì bước
+    dò tên vẫn ép âm cũ học từ các tên khác. Chữ giữ nguyên âm không bị chốt (giữ chữ đa âm)."""
+    osy, nsy = syllables(old), syllables(new)
     want: dict[str, str] = {}
     for zh in zhs:
-        if len(zh) == len(sy) and all(is_han(c) for c in zh):
-            for c, s in zip(zh, sy):
-                want[c] = norm_syllable(s)
-    if not want or f"## {READINGS_SECTION}" not in md:
+        if len(zh) == len(nsy) == len(osy) and all(is_han(c) for c in zh):
+            for c, o, n in zip(zh, osy, nsy):
+                if norm_syllable(o) != norm_syllable(n):
+                    want[c] = norm_syllable(n)
+    if not want:
         return md
-    start = md.index(f"## {READINGS_SECTION}")
+    marker = f"## {READINGS_SECTION}"
+    if marker not in md:
+        md = (md.rstrip("\n") + f"\n\n{marker}\n\n"
+              "Âm Hán-Việt đã chốt cho từng chữ (tự ghi khi gặp chữ mới; sửa ở đây để đổi).\n\n"
+              "| Chữ | Âm | Ghi chú |\n|---|---|---|\n")
+    start = md.index(marker)
     nxt = re.search(r"\n## ", md[start + 3:])
     end = start + 3 + nxt.start() if nxt else len(md)
     block = md[start:end]
     for c, r in want.items():
-        block = re.sub(rf"^(\|\s*{re.escape(c)}\s*\|\s*)[^|\n]*?(\s*\|)", rf"\g<1>{r}\g<2>",
-                       block, flags=re.M)
+        row = re.compile(rf"^(\|\s*{re.escape(c)}\s*\|\s*)[^|\n]*?(\s*\|)", re.M)
+        if row.search(block):
+            block = row.sub(rf"\g<1>{r}\g<2>", block)
+        else:
+            block = block.rstrip("\n") + f"\n| {c} | {r} | đổi tên |\n"
     return md[:start] + block + md[end:]
 
 
@@ -200,12 +219,13 @@ def rename_apply(slug: str, req: RenameRequest):
                 replaced += k
         md = settings.rules_dir / slug / "novel.md"
         with NOVEL_MD_LOCK:
-            md_text = md.read_text(encoding="utf-8") if md.is_file() else ""
+            orig_md = md.read_text(encoding="utf-8") if md.is_file() else ""
+            md_text = _nfc(orig_md)
             row = re.compile(rf"^\|\s*([^|\n]*?)\s*\|\s*{re.escape(old)}\s*\|", re.M)
             zhs = [m.group(1) for m in row.finditer(md_text)]
             new_md, rows = re.compile(
                 rf"^(\|[^|\n]*\|\s*){re.escape(old)}(\s*\|)", re.M).subn(rf"\g<1>{new}\g<2>", md_text)
-            new_md = _update_readings(new_md, zhs, new)
+            new_md = _update_readings(new_md, zhs, old, new)
             if not changed and new_md == md_text:
                 return {"backup_id": None, "files": 0, "replaced": 0, "glossary_rows": 0}
             bdir.mkdir(parents=True, exist_ok=True)
@@ -223,6 +243,12 @@ def rename_apply(slug: str, req: RenameRequest):
                 tmp.replace(path)
             if new_md != md_text:
                 write_novel_md(md, new_md)
+            # Hash nội dung SAU khi đổi (đọc lại từ đĩa): hoàn tác chỉ khôi phục khi chưa ai
+            # sửa tiếp. Mất điện giữa chừng → manifest thiếu hash → hoàn tác từ chối (an toàn).
+            for (path, _), f in zip(changed, manifest["files"]):
+                f["after"] = _sha(path.read_bytes())
+            manifest["novel_md_after"] = _sha(md.read_bytes()) if md.is_file() else None
+            (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     return {"backup_id": backup_id, "files": len(changed), "replaced": replaced,
             "glossary_rows": rows, "protected": protected}
 
@@ -239,6 +265,19 @@ def rename_undo(slug: str, req: UndoRequest):
             raise HTTPException(404, "Không tìm thấy bản sao lưu")
         manifest = json.loads(mf.read_text(encoding="utf-8"))
         out_root = (settings.output_dir / slug).resolve()
+        md_path = settings.rules_dir / slug / "novel.md"
+        # Có thay đổi sau lần đổi tên (sửa bản dịch, dịch lại, sửa bảng…) → không đè, báo 409.
+        changed_after = []
+        for f in manifest.get("files", []):
+            dst = Path(f["path"])
+            if not dst.is_file() or _sha(dst.read_bytes()) != f.get("after"):
+                changed_after.append(dst.name)
+        if manifest.get("novel_md") and (not md_path.is_file()
+                                         or _sha(md_path.read_bytes()) != manifest.get("novel_md_after")):
+            changed_after.append("novel.md")
+        if changed_after:
+            raise HTTPException(409, "Không hoàn tác được: đã có thay đổi sau lần đổi tên ở "
+                                     + ", ".join(changed_after[:5]))
         restored = 0
         for f in manifest.get("files", []):
             dst = Path(f["path"]).resolve()

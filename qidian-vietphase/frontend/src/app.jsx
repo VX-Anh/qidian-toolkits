@@ -790,27 +790,28 @@ function App() {
     }
   }
 
-  // Đổi tên Việt trong bảng → hỏi áp dụng cho các chương đã dịch (có sao lưu phía server).
+  // Đổi tên Việt trong bảng → máy chủ đổi trong bản dịch + bảng thuật ngữ + âm đã chốt
+  // (một lần, có sao lưu). Chưa chương nào dùng tên cũ thì đổi luôn, không hỏi.
+  // Trả true nếu máy chủ đã đổi dòng trong bảng, false nếu người dùng từ chối;
+  // lỗi (vd 409 đang dịch) được ném ra để KHÔNG lưu bảng lệch với bản dịch.
   async function offerRenameInChapters(oldVi, newVi) {
     const slug = currentSlug;
     const base = `/api/names/${encodeURIComponent(slug)}/rename`;
-    try {
-      const pv = await api.post(`${base}/preview`, { old_vi: oldVi, new_vi: newVi });
-      if (!pv.total) return false;
+    const pv = await api.post(`${base}/preview`, { old_vi: oldVi, new_vi: newVi });
+    if (pv.total) {
       const list = pv.chapters.slice(0, 8).map(c => `• Chương ${c.chapter_num}: ${c.count} chỗ`).join("\n");
       const more = pv.chapters.length > 8 ? `\n… và ${pv.chapters.length - 8} chương khác` : "";
       const keep = pv.protected?.length ? `\n\nGiữ nguyên trong tên dài hơn: ${pv.protected.join(", ")}` : "";
       if (!window.confirm(
         `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}${keep}\n\nBản dịch cũ được sao lưu trên máy chủ.`
       )) return false;
-      const r = await api.post(`${base}/apply`, { old_vi: oldVi, new_vi: newVi });
+    }
+    const r = await api.post(`${base}/apply`, { old_vi: oldVi, new_vi: newVi });
+    if (r.files) {
       await loadChapters(slug);
       setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
-      return !!r.glossary_rows;
-    } catch (err) {
-      setToast({ msg: `Lỗi đổi tên trong các chương: ${err.message}`, type: "error" });
-      return false;
     }
+    return !!r.glossary_rows;
   }
 
   // Kiểm + tự sửa tên riêng cho mọi chương đã dịch của truyện.
