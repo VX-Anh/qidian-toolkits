@@ -781,8 +781,16 @@ function App() {
       const target = apply ? { ...newItem, vi: oldVi } : newItem;
       await replaceGlossRow(slug, oldItem, target);
       if (apply) {
-        const r = await api.post(`/api/names/${encodeURIComponent(slug)}/rename/apply`,
-                                 { old_vi: oldVi, new_vi: newVi });
+        let r;
+        try {
+          r = await api.post(`/api/names/${encodeURIComponent(slug)}/rename/apply`,
+                             { old_vi: oldVi, new_vi: newVi });
+        } catch (err) {
+          // Đổi tên lỗi (vd đang dịch) → trả dòng về như cũ để bảng không đổi nửa vời và
+          // trình sửa (so theo zh/vi/ghi chú) vẫn giữ bản nháp.
+          await replaceGlossRow(slug, target, oldItem).catch(() => {});
+          throw err;
+        }
         if (r.files) setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
         await loadChapters(slug);
       }

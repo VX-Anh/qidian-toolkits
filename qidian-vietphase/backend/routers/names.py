@@ -291,24 +291,29 @@ def rename_undo(slug: str, req: UndoRequest):
             raise HTTPException(409, "Không hoàn tác được: đã có thay đổi sau lần đổi tên ở "
                                      + ", ".join(changed_after[:5]))
 
-        # 2. Ghi (tmp + replace từng file); lỗi → trả các file đã ghi về nội dung hiện tại.
-        current = {dst: dst.read_bytes() for dst, _, _ in plan}
-        written: list[Path] = []
+        # 2. Chuẩn bị đủ file tạm TRƯỚC (bước có thể hết dung lượng); lỗi → dọn tmp, chưa
+        #    đổi gì. Sau đó chỉ còn os.replace (đổi tên, không cần thêm dung lượng).
+        tmps: list[tuple[Path, Path]] = []
         try:
             for dst, src, _ in plan:
                 tmp = dst.with_name(dst.name + ".undo.tmp")
+                tmps.append((tmp, dst))
                 tmp.write_bytes(src.read_bytes())
-                tmp.replace(dst)
-                written.append(dst)
         except OSError as exc:
-            for dst in written:
-                try:
-                    tmp = dst.with_name(dst.name + ".undo.tmp")
-                    tmp.write_bytes(current[dst])
-                    tmp.replace(dst)
-                except OSError:
-                    pass
-            raise HTTPException(500, f"Hoàn tác lỗi, đã trả lại như trước: {exc}") from exc
+            for tmp, _ in tmps:
+                tmp.unlink(missing_ok=True)
+            raise HTTPException(500, f"Hoàn tác lỗi, chưa thay đổi file nào: {exc}") from exc
+        done = 0
+        try:
+            for tmp, dst in tmps:
+                tmp.replace(dst)
+                done += 1
+        except OSError as exc:
+            for tmp, _ in tmps[done:]:
+                tmp.unlink(missing_ok=True)
+            # Giữ bản sao lưu; báo đúng số file đã khôi phục.
+            raise HTTPException(500, f"Hoàn tác dừng giữa chừng ({done}/{len(tmps)} file), "
+                                     f"bản sao lưu vẫn giữ: {exc}") from exc
         shutil.rmtree(bdir, ignore_errors=True)
     files = sum(1 for dst, _, _ in plan if dst != md_path)
     return {"restored": files, "novel_md": bool(manifest.get("novel_md"))}
