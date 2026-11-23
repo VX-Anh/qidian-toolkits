@@ -1,14 +1,13 @@
 # VietPhase
 
-Agent dịch tiểu thuyết Trung → Việt, đa agent chạy song song (FastAPI + Gemini trên Vertex AI).
-Kèm OCR (PaddleOCR offline hoặc Gemini vision), Story-Wiki và bảng thuật ngữ.
+Agent dịch tiểu thuyết Trung → Việt, đa agent chạy song song (FastAPI + Claude API).
+Kèm OCR (PaddleOCR offline hoặc Claude vision), Story-Wiki và bảng thuật ngữ.
 
 ## Yêu cầu
 
 - Python >= 3.11
 - [uv](https://docs.astral.sh/uv/)
-- Project GCP đã bật Vertex AI (đăng nhập bằng `gcloud auth application-default login`
-  hoặc service-account JSON qua `GOOGLE_APPLICATION_CREDENTIALS`)
+- Claude API key (console.anthropic.com)
 
 ## Cài đặt
 
@@ -22,15 +21,16 @@ Copy `.env.example` → `.env` rồi điền (danh sách đầy đủ xem trong 
 
 | Biến                    | Ý nghĩa                                              |
 | ----------------------- | ---------------------------------------------------- |
-| `GOOGLE_CLOUD_PROJECT`  | GCP project id (Vertex AI)                           |
-| `GOOGLE_CLOUD_LOCATION` | Mặc định `global`                                    |
-| `GEMINI_MODEL`          | Model dịch (mặc định `gemini-3.5-flash`)             |
-| `THINKING_LEVEL`        | `LOW` (mặc định) / `MEDIUM` / `HIGH` / `MINIMAL`     |
+| `ANTHROPIC_API_KEY`     | Claude API key (hoặc `ANTHROPIC_API_KEY_FILE` trỏ tới file chứa key) |
+| `MODEL_TRANSLATE`       | Model dịch (mặc định `claude-sonnet-5-5`)            |
+| `MODEL_LIGHT`           | Trích thuật ngữ / review / wiki (`claude-haiku-5-5`) |
+| `MODEL_VISION`          | OCR ảnh bằng AI (`claude-sonnet-5-5`)                |
+| `LLM_EFFORT`            | `low` (mặc định) / `medium` / `high` / `xhigh` / `max` |
 | `INPUT_DIR`             | Thư mục chứa file `.txt` chương tiếng Trung          |
 | `OUTPUT_DIR`            | Thư mục lưu bản dịch                                 |
 | `RULES_DIR`             | Thư mục cấu hình truyện (mặc định `rules`)           |
 | `CONCURRENCY`           | Số TranslatorAgent chạy song song (mặc định `3`)     |
-| `OCR_DEFAULT_ENGINE`    | `paddle` (offline, miễn phí) hoặc `gemini`           |
+| `OCR_DEFAULT_ENGINE`    | `paddle` (offline, miễn phí) hoặc `claude`           |
 
 File chương đặt tên theo dạng `第675章 天演.txt` (số chương nằm trong tên file).
 
@@ -83,8 +83,8 @@ Chạy trong Docker của WSL trên PC, cạnh stack ai-company; ra Internet qua
    ```bash
    wsl -d Ubuntu -u aico -- bash /mnt/d/TVPL/Marshy/qidian-toolkits/qidian-vietphase/deploy/deploy-aico.sh
    ```
-2. Điền `GOOGLE_CLOUD_PROJECT` trong `/home/aico/vietphase/.env`, chép khoá
-   service-account (role *Vertex AI User*) vào `/home/aico/vietphase/secrets/gcp-sa.json`.
+2. Tạo `/home/aico/vietphase/secrets/anthropic_api_key` chỉ chứa Claude API key
+   (model / effort chỉnh trong `/home/aico/vietphase/.env`).
    Muốn mang dữ liệu cũ sang thì chép vào `/home/aico/vietphase/data/` (input, output,
    db/state.db...) — đường dẫn bản dịch của máy cũ được tự trỏ lại khi khởi động.
 3. Chạy lại script → build + chạy container `vietphase` (mạng `ai-company_workers`).
@@ -93,7 +93,7 @@ Chạy trong Docker của WSL trên PC, cạnh stack ai-company; ra Internet qua
 5. Mở https://read.aico.io.vn → trang `/login` → nhập `API_TOKEN`. Extension đã đặt
    sẵn Server URL `https://read.aico.io.vn`; chỉ cần điền API token.
 
-OCR trên PC mặc định dùng Gemini vision (PC không có GPU). PaddleOCR CPU là tuỳ chọn:
+OCR trên PC mặc định dùng Claude vision (PC không có GPU). PaddleOCR CPU là tuỳ chọn:
 `docker compose -f deploy/compose.aico.yaml --profile ocr up -d`, rồi đặt
 `OCR_SERVICE_URL=http://vietphase-ocr:8000` và `OCR_DEFAULT_ENGINE=paddle` trong `.env`.
 
@@ -107,18 +107,16 @@ hợp với mô hình một người dùng (xem ghi chú DB cuối mục).
 
 ```bash
 cp .env.example .env
-# Sửa: GOOGLE_CLOUD_PROJECT. Các đường dẫn INPUT_DIR/OUTPUT_DIR/... KHÔNG cần
+# Các đường dẫn INPUT_DIR/OUTPUT_DIR/... KHÔNG cần
 # sửa — docker-compose.yml đã override sang /data/... khi chạy container.
 ```
 
-**2. Service-account key cho Vertex AI**
-
-Trong container không dùng `gcloud auth ... login` được. Tải service-account JSON
-(role tối thiểu: *Vertex AI User*) từ GCP Console rồi đặt vào:
+**2. Claude API key**
 
 ```bash
 mkdir -p secrets
-cp /đường/dẫn/key.json secrets/gcp-sa.json   # compose mount read-only sẵn
+printf '%s' 'sk-ant-...' > secrets/anthropic_api_key   # compose mount read-only sẵn
+chmod 600 secrets/anthropic_api_key
 ```
 
 **3. OCR offline (PaddleOCR) — sidecar GPU**
@@ -174,7 +172,7 @@ docker compose exec vietphase \
 >
 > **OCR offline (PaddleOCR)** giờ chạy trong container qua sidecar service `ocr`
 > (xem bước 3). Mặc định `OCR_DEFAULT_ENGINE=paddle` (miễn phí); đổi sang
-> `gemini` nếu muốn OCR bằng Gemini vision. Dev trên Windows thì để
+> `claude` nếu muốn OCR bằng Claude vision. Dev trên Windows thì để
 > `OCR_SERVICE_URL` trống → paddle chạy qua subprocess venv `qidian-ocr/`.
 
 ### Gửi chương từ extension lên server đã host

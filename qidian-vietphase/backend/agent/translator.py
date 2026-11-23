@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 from typing import AsyncIterator
 
-from google import genai
+import anthropic
 
 from ..config import settings
 from .base import BaseAgent, AgentEvent
@@ -104,7 +104,7 @@ class TranslatorAgent(BaseAgent):
         novel_slug: str,
         profile: NovelProfile,
         state: SharedState,
-        client: genai.Client,
+        client: anthropic.AsyncAnthropic,
         output_dir: Path,
         review_issues: str | None = None,
     ):

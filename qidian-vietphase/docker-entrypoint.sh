@@ -11,12 +11,12 @@ if [ "$(id -u)" = "0" ]; then
         /*) [ -d "$RULES_DIR" ] && chown -R app:app "$RULES_DIR" 2>/dev/null || true ;;
     esac
 
-    # Khoá service-account trên host để quyền 600 của chủ file (khác UID app) → chép
-    # một bản riêng cho app đọc, không phải nới quyền file gốc trên host.
-    if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+    # File API key trên host để quyền 600 của chủ file (khác UID app) → chép một bản
+    # riêng cho app đọc, không phải nới quyền file gốc trên host.
+    if [ -n "${ANTHROPIC_API_KEY_FILE:-}" ] && [ -f "$ANTHROPIC_API_KEY_FILE" ]; then
         mkdir -p /run/vietphase
-        install -o app -g app -m 600 "$GOOGLE_APPLICATION_CREDENTIALS" /run/vietphase/gcp-sa.json
-        export GOOGLE_APPLICATION_CREDENTIALS=/run/vietphase/gcp-sa.json
+        install -o app -g app -m 600 "$ANTHROPIC_API_KEY_FILE" /run/vietphase/anthropic_api_key
+        export ANTHROPIC_API_KEY_FILE=/run/vietphase/anthropic_api_key
     fi
 
     exec runuser -u app -- "$@"

@@ -499,7 +499,7 @@ function streamOcr(server, jobId) {
           setStatus(msg.msg || 'Đang OCR…');
           if (msg.total) setProgress(Math.round((msg.page / msg.total) * 100));
           break;
-        case 'ocr_token': // chỉ engine gemini stream token; paddle không có
+        case 'ocr_token': // chỉ engine claude stream token; paddle không có
           tokenText += msg.text || '';
           previewEl.textContent = tokenText.slice(-600);
           previewEl.style.display = 'block';

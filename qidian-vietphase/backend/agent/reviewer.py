@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import AsyncIterator
 
-from google import genai
+import anthropic
 
 from ..config import settings
 from .base import BaseAgent, AgentEvent
@@ -60,7 +60,7 @@ class ReviewerAgent(BaseAgent):
         source_path: Path,
         profile: NovelProfile,
         state: SharedState,
-        client: genai.Client,
+        client: anthropic.AsyncAnthropic,
     ):
         self.filename = filename
         reg = _make_registry(translated_path, source_path, profile, state, filename, novel_slug)
@@ -68,7 +68,7 @@ class ReviewerAgent(BaseAgent):
             agent_id=f"reviewer:{filename}",
             client=client,
             registry=reg,
-            model=settings.llm_model,
+            model=settings.llm_light_model,
         )
 
     def _system_prompt(self) -> str:

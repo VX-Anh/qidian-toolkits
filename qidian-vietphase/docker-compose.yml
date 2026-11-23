@@ -28,18 +28,17 @@ services:
       API_TOKEN: ${API_TOKEN:?Đặt API_TOKEN trong .env trước khi deploy}
       DEV_MODE: "false"
       # OCR offline PaddleOCR chạy ở sidecar service "ocr" bên dưới (share volume /data).
-      # Mặc định dùng paddle (miễn phí); vẫn chọn được gemini theo từng request.
+      # Mặc định dùng paddle (miễn phí); vẫn chọn được claude theo từng request.
       OCR_DEFAULT_ENGINE: paddle
       OCR_SERVICE_URL: http://ocr:8000
-      # Service-account JSON cho Vertex AI (mount read-only bên dưới) — dùng khi
-      # engine=gemini hoặc cho phần dịch.
-      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      # Claude API key (file mount read-only bên dưới) — cho phần dịch + OCR engine claude.
+      ANTHROPIC_API_KEY_FILE: /secrets/anthropic_api_key
 
     volumes:
       # Dữ liệu bền vững: tồn tại qua mỗi lần rebuild/redeploy container.
       - ./data:/data
-      # Khoá service-account, chỉ đọc. Tạo file ./secrets/gcp-sa.json trên host.
-      - ./secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+      # Claude API key, chỉ đọc. Tạo file ./secrets/anthropic_api_key (chỉ chứa key) trên host.
+      - ./secrets/anthropic_api_key:/secrets/anthropic_api_key:ro
 
     depends_on:
       # Chờ sidecar nạp xong model (HEALTHCHECK trong qidian-ocr/Dockerfile) — tránh

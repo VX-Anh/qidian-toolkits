@@ -25,7 +25,7 @@ Orchestrator → TranslatorAgent × N (parallel, semaphore-limited)
              ExtractorAgent → updates novel.md
 ```
 
-Each agent follows a **ReAct loop** in `backend/agent/base.py`: call Gemini (native `google-genai` SDK, streaming) → if function calls → execute tools in parallel → append results → repeat until no tool calls. The model's turn (including the `thought_signature` on each `function_call` part) is appended verbatim to `self.history` — required so Gemini 3 doesn't reject multi-turn tool calls with `400 missing thought_signature`.
+Each agent follows a **ReAct loop** in `backend/agent/base.py`: call Claude (`anthropic` SDK, `client.beta.messages.stream`) → if `tool_use` blocks → validate inputs, run tools in parallel → return all `tool_result`s in ONE user message → repeat until no tool calls. `response.content` is appended verbatim (thinking / fallback blocks included). Tools use `eager_input_streaming` so `save_chapter.content` streams to the UI (parsed from `partial_json` with `jiter` trailing-strings); because the server no longer validates those inputs, `ToolRegistry.validate` does. `max_tokens` with a `tool_use` or `refusal` raises (chapter → FAILED).
 
 **Key files:**
 - `backend/agent/base.py` — BaseAgent ReAct loop, AgentEvent dataclass
@@ -60,24 +60,12 @@ Each novel has its own `rules/{slug}/novel.md` with:
 
 ## Environment
 
-**Auth (Vertex AI):** Application Default Credentials — run once:
-```bash
-gcloud auth application-default login
-gcloud config set project <PROJECT_ID>
-```
-(or point `GOOGLE_APPLICATION_CREDENTIALS` at a service-account JSON).
-
 Copy `.env.example` → `.env`, fill in:
-- `GOOGLE_CLOUD_PROJECT` — GCP project id (Vertex)
-- `GOOGLE_CLOUD_LOCATION` — default `global`
-- `GEMINI_MODEL` / `GEMINI_VISION_MODEL` — default `gemini-3.5-flash`
-- `THINKING_LEVEL` — `LOW` (default) | `MEDIUM` | `HIGH` | `MINIMAL`. Gemini 3 can't disable thinking; `LOW` keeps translation fast/cheap.
+- `ANTHROPIC_API_KEY` (or `ANTHROPIC_API_KEY_FILE` → file containing the key; Docker uses this)
+- `MODEL_TRANSLATE` (default `claude-sonnet-5-5`), `MODEL_LIGHT` (extractor/reviewer/wiki, `claude-haiku-5-5`), `MODEL_VISION` (OCR, `claude-sonnet-5-5`)
+- `LLM_EFFORT` — `low` (default) … `max`; sent as `output_config.effort`
 - `INPUT_DIR` / `OUTPUT_DIR` / `CONCURRENCY`
 
-**LLM client:** `backend/shared.py:get_client()` returns a single
-`google.genai.Client(vertexai=True, project=, location=)`. Agents call
-`client.aio.models.generate_content_stream(...)`. The streaming + function-call +
-vision loop lives in `base.py`; per-call config (system_instruction, `thinking_level`,
-tools, `stream_function_call_arguments`) is built in `BaseAgent._gen_config()`.
-`ToolRegistry.genai_tools()` produces `types.Tool` / `FunctionDeclaration` from
-Python type hints.
+Do not name settings with a `CLAUDE_` prefix: Claude Code exports variables such as `CLAUDE_EFFORT`, which pydantic-settings would pick up.
+
+**LLM client:** `backend/shared.py:get_client()` returns one `anthropic.AsyncAnthropic` (SDK retries 408/409/429/5xx, `LLM_RETRY_ATTEMPTS`). Request config is built in `BaseAgent._request_kwargs()`: cached system prompt + top-level `cache_control`, effort, tools from `ToolRegistry.anthropic_tools()` (JSON Schema from Python type hints), and server-side refusal fallback (`fallbacks: "default"`) on models that support it (`base.fallback_kwargs`). Every model call first takes the shared `RateLimiter`.

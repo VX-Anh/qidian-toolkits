@@ -3,8 +3,8 @@
 # Chạy từ Windows:
 #   wsl -d Ubuntu -u aico -- bash /mnt/d/TVPL/Marshy/qidian-toolkits/qidian-vietphase/deploy/deploy-aico.sh
 #
-# Lần đầu script tạo sẵn thư mục dữ liệu + .env mẫu rồi dừng để bạn điền
-# (API_TOKEN, GOOGLE_CLOUD_PROJECT) và chép khoá service-account vào secrets/gcp-sa.json.
+# Lần đầu script tạo sẵn thư mục dữ liệu + .env (API_TOKEN ngẫu nhiên) rồi dừng nếu
+# chưa có Claude API key ở secrets/anthropic_api_key (file chỉ chứa key, quyền 600).
 set -euo pipefail
 cd "$(dirname "$0")"
 HOME_DIR=${VIETPHASE_HOME:-/home/aico/vietphase}
@@ -26,21 +26,21 @@ if [ ! -f "$HOME_DIR/.env" ]; then
     cat >"$HOME_DIR/.env" <<EOF
 # VietPhase trên read.aico.io.vn — file này KHÔNG nằm trong git.
 API_TOKEN=$token
-GOOGLE_CLOUD_PROJECT=
-GOOGLE_CLOUD_LOCATION=global
-GEMINI_MODEL=gemini-3.5-flash
-GEMINI_VISION_MODEL=gemini-3.5-flash
-THINKING_LEVEL=LOW
+MODEL_TRANSLATE=claude-sonnet-5-5
+MODEL_LIGHT=claude-haiku-5-5
+MODEL_VISION=claude-sonnet-5-5
+LLM_EFFORT=low
 CONCURRENCY=3
 EOF
     chmod 600 "$HOME_DIR/.env"
     echo "Đã tạo $HOME_DIR/.env (API_TOKEN sinh ngẫu nhiên — xem bằng: cat $HOME_DIR/.env)."
 fi
 
-missing=0
-grep -q '^GOOGLE_CLOUD_PROJECT=.\+' "$HOME_DIR/.env" || { echo "Thiếu GOOGLE_CLOUD_PROJECT trong $HOME_DIR/.env"; missing=1; }
-[ -s "$HOME_DIR/secrets/gcp-sa.json" ] || { echo "Thiếu khoá service-account: $HOME_DIR/secrets/gcp-sa.json"; missing=1; }
-[ "$missing" = 0 ] || { echo "Điền đủ rồi chạy lại script."; exit 2; }
+if [ ! -s "$HOME_DIR/secrets/anthropic_api_key" ]; then
+    echo "Thiếu Claude API key: tạo $HOME_DIR/secrets/anthropic_api_key (chỉ chứa key) rồi chạy lại."
+    exit 2
+fi
+chmod 600 "$HOME_DIR/secrets/anthropic_api_key"
 
 # compose đọc API_TOKEN để kiểm tra bắt buộc (biến ${API_TOKEN:?}) → nạp từ .env.
 set -a; . "$HOME_DIR/.env"; set +a

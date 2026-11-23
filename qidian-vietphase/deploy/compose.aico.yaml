@@ -9,8 +9,8 @@
 # Dữ liệu + bí mật nằm trên ổ WSL (đọc/ghi nhanh hơn /mnt/d, không lẫn vào repo):
 #   ${VIETPHASE_HOME:-/home/aico/vietphase}/data/      input/ output/ ocr_images/ vietphase/ db/
 #   ${VIETPHASE_HOME:-/home/aico/vietphase}/rules/     novel.md từng truyện (bền qua rebuild)
-#   ${VIETPHASE_HOME:-/home/aico/vietphase}/.env       API_TOKEN, GOOGLE_CLOUD_PROJECT...
-#   ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/gcp-sa.json
+#   ${VIETPHASE_HOME:-/home/aico/vietphase}/.env       API_TOKEN, MODEL_*, LLM_EFFORT...
+#   ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/anthropic_api_key   (chỉ chứa key)
 name: vietphase
 
 services:
@@ -33,10 +33,10 @@ services:
       # Public ra Internet → bắt buộc có token (compose dừng nếu .env thiếu).
       API_TOKEN: ${API_TOKEN:?Đặt API_TOKEN trong .env của VietPhase (xem deploy-aico.sh)}
       DEV_MODE: "false"
-      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
-      # PC không có GPU cho PaddleOCR → OCR mặc định bằng Gemini vision. Bật sidecar
+      ANTHROPIC_API_KEY_FILE: /secrets/anthropic_api_key
+      # PC không có GPU cho PaddleOCR → OCR mặc định bằng Claude vision. Bật sidecar
       # PaddleOCR (profile "ocr", chạy CPU, nặng RAM) thì đặt OCR_SERVICE_URL trong .env.
-      OCR_DEFAULT_ENGINE: ${OCR_DEFAULT_ENGINE:-gemini}
+      OCR_DEFAULT_ENGINE: ${OCR_DEFAULT_ENGINE:-claude}
       OCR_SERVICE_URL: ${OCR_SERVICE_URL:-}
     # Sau Cloudflare: tin X-Forwarded-Proto để cookie đăng nhập có cờ Secure (https).
     command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999",
@@ -44,11 +44,11 @@ services:
     volumes:
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/data:/data
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/rules:/rules
-      - ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+      - ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/anthropic_api_key:/secrets/anthropic_api_key:ro
     networks:
       workers:
         aliases: [vietphase]
-      egress: {}     # ra Internet gọi Vertex AI
+      egress: {}     # ra Internet gọi Claude API
 
   # PaddleOCR offline trên CPU (tuỳ chọn): docker compose --profile ocr up -d
   # rồi đặt OCR_SERVICE_URL=http://vietphase-ocr:8000 + OCR_DEFAULT_ENGINE=paddle trong .env.

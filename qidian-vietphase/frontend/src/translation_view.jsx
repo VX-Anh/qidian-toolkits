@@ -308,8 +308,8 @@ function TranslationView({
                     <button className="btn ghost sm" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => runOcr("paddle")}>
                       <Icon name="zap" size={12} color="var(--accent)" /> PaddleOCR (offline)
                     </button>
-                    <button className="btn ghost sm" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => runOcr("openai")}>
-                      <Icon name="sparkles" size={12} /> OCR bằng AI (Gemini)
+                    <button className="btn ghost sm" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => runOcr("claude")}>
+                      <Icon name="sparkles" size={12} /> OCR bằng AI (Claude)
                     </button>
                   </div>
                 </>

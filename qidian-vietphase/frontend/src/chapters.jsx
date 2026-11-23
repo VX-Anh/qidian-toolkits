@@ -400,11 +400,11 @@ function OcrUploadButton({ onUploadImages }) {
               <Icon name="zap" size={13} color="var(--accent)" />
               <span style={{ flex: 1 }}>PaddleOCR <span style={{ color: "var(--fg-5)" }}>· offline, mặc định</span></span>
             </button>
-            <button style={item} onClick={() => pick("openai")}
+            <button style={item} onClick={() => pick("claude")}
               onMouseEnter={e => e.currentTarget.style.background = "var(--bg-elevated)"}
               onMouseLeave={e => e.currentTarget.style.background = "none"}>
               <Icon name="sparkles" size={13} color="var(--fg-3)" />
-              <span style={{ flex: 1 }}>OCR bằng AI <span style={{ color: "var(--fg-5)" }}>· Gemini vision</span></span>
+              <span style={{ flex: 1 }}>OCR bằng AI <span style={{ color: "var(--fg-5)" }}>· Claude vision</span></span>
             </button>
           </div>
         </>

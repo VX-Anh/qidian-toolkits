@@ -43,7 +43,7 @@ async def upload_ocr(
         paths.append(p)
 
     processor = run_paddle_ocr if engine == "paddle" else run_ocr
-    # Chỉ engine gemini cần client Vertex — paddle không được chết vì thiếu credential.
+    # Chỉ engine Claude cần API key — paddle không được chết vì thiếu key.
     client = get_client() if engine != "paddle" else None
     task = asyncio.create_task(
         processor(job_id, novel_slug, chapter_title, paths, get_state(), eq, client, settings)

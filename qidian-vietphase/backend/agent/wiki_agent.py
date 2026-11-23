@@ -12,7 +12,7 @@ glossary đã-duyệt, chỉ dùng đề xuất của model khi term chưa có t
 """
 from typing import AsyncIterator
 
-from google import genai
+import anthropic
 
 from ..config import settings
 from .base import AgentEvent, BaseAgent
@@ -112,7 +112,7 @@ class WikiAgent(BaseAgent):
         source_content: str,
         profile: NovelProfile,
         state: SharedState,
-        client: genai.Client,
+        client: anthropic.AsyncAnthropic,
     ):
         self.filename = filename
         self.chapter_num = chapter_num
@@ -124,7 +124,7 @@ class WikiAgent(BaseAgent):
             agent_id=f"wiki:{filename}",
             client=client,
             registry=reg,
-            model=settings.llm_model,
+            model=settings.llm_light_model,
         )
 
     def _system_prompt(self) -> str:

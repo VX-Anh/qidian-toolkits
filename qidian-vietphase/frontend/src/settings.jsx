@@ -137,13 +137,10 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
               <div className="settings-card-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}>
                   <label>Model</label>
-                  <select className="input-field" defaultValue="gemini-3.5-flash">
-                    <option>gemini-3.5-flash</option>
-                    <option>gemini-2.5-flash</option>
-                    <option>gemini-2.5-pro</option>
-                    <option>gemini-2.5-flash-lite</option>
-                    <option>gpt-4o-mini</option>
-                  </select>
+                  {/* Model chọn trên server (MODEL_TRANSLATE / MODEL_LIGHT / MODEL_VISION trong .env) */}
+                  <div className="input-field" style={{ opacity: 0.8 }} title="Đổi trong .env của server">
+                    Claude · Sonnet dịch, Haiku việc phụ
+                  </div>
                 </div>
                 <div className="field" style={{ marginBottom: 0 }}>
                   <label>Concurrency</label>

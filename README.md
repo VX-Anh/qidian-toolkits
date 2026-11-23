@@ -8,7 +8,7 @@ Bộ công cụ cá nhân để lấy text chương truyện Qidian (truyện đ
 |---|---|
 | [`qidian-extension/`](qidian-extension/) | Extension Chrome (MV3): lấy text chương; nếu trang dùng font mã hoá thì chụp màn hình qua native host Python (`mss`), rồi gửi text/ảnh lên VietPhase |
 | [`qidian-ocr/`](qidian-ocr/) | PaddleOCR 3.x (PP-OCRv6): CLI `run_ocr.py` và server FastAPI `server.py` (sidecar Docker GPU), có khử dòng trùng do ảnh chồng lấn |
-| [`qidian-vietphase/`](qidian-vietphase/) | App chính: backend FastAPI + frontend React, đa agent dịch bằng Gemini (Vertex AI), bảng thuật ngữ, Story-Wiki, OCR |
+| [`qidian-vietphase/`](qidian-vietphase/) | App chính: backend FastAPI + frontend React, đa agent dịch bằng Claude API, bảng thuật ngữ, Story-Wiki, OCR |
 | [`qidian-scraper/`](qidian-scraper/) | Script cào trang chương (thử nghiệm) |
 | `qidian-extraction.py` | Lấy text bằng Playwright từ trình duyệt đã đăng nhập (thử nghiệm) |
 | `llm-wiki-flow.md` | Ghi chú phân tích dự án llm_wiki — nguồn ý tưởng cho Story-Wiki |
@@ -32,7 +32,7 @@ Thư mục `data/` (bản gốc, ảnh chụp, bản dịch) và file SQLite `ba
 
 ```bash
 cd qidian-vietphase
-cp .env.example .env          # điền GOOGLE_CLOUD_PROJECT ...
+cp .env.example .env          # điền ANTHROPIC_API_KEY ...
 uv sync
 uv run uvicorn backend.main:app --reload --port 9999
 # mở http://127.0.0.1:9999

@@ -1,8 +1,13 @@
+"""ToolRegistry — khai báo tool cho Claude từ type hint của hàm Python.
+
+Mỗi agent dựng registry riêng qua closure (giữ trạng thái chương mà không cần global).
+Tool được khai báo `eager_input_streaming` (input stream ra ngay khi model viết), nên
+server không validate input → `validate()` kiểm lại trước khi chạy tool.
+"""
 import asyncio
+import json
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, get_type_hints
-
-from google.genai import types
 
 
 @dataclass
@@ -12,46 +17,58 @@ class ToolResult:
     data: Any
     error: Optional[str] = None
 
-    def to_response(self) -> dict:
-        """Function response dict cho genai Part.from_function_response."""
+    def to_content(self) -> str:
+        """Nội dung tool_result gửi lại cho Claude."""
         if not self.success:
-            return {"error": self.error}
-        return self.data if isinstance(self.data, dict) else {"result": self.data}
+            return f"ERROR: {self.error}"
+        if isinstance(self.data, str):
+            return self.data
+        return json.dumps(self.data, ensure_ascii=False)
 
 
-_TYPE_MAP = {str: "STRING", int: "INTEGER", float: "NUMBER", bool: "BOOLEAN"}
-
-
-def _py_type_to_genai(annotation) -> types.Schema:
-    return types.Schema(type=_TYPE_MAP.get(annotation, "STRING"))
+_JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
+_PY_CHECK = {"string": str, "integer": int, "number": (int, float), "boolean": bool}
 
 
 class ToolRegistry:
     def __init__(self):
         self._fns: dict[str, Callable] = {}
-        self._decls: list[types.FunctionDeclaration] = []
+        self._tools: list[dict] = []
+        self._props: dict[str, dict[str, str]] = {}
 
     def register(self, fn: Callable, name: str, description: str):
         hints = get_type_hints(fn)
         hints.pop("return", None)
-        props = {k: _py_type_to_genai(v) for k, v in hints.items()}
-
-        self._decls.append(types.FunctionDeclaration(
-            name=name,
-            description=description,
-            parameters=types.Schema(
-                type="OBJECT",
-                properties=props,
-                required=list(props.keys()),
-            ),
-        ))
+        props = {k: _JSON_TYPES.get(v, "string") for k, v in hints.items()}
+        self._props[name] = props
+        self._tools.append({
+            "name": name,
+            "description": (description or "").strip(),
+            "eager_input_streaming": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {k: {"type": t} for k, t in props.items()},
+                "required": list(props),
+                "additionalProperties": False,
+            },
+        })
         self._fns[name] = fn
 
-    def genai_tools(self) -> list[types.Tool]:
-        """Bọc tất cả function declarations thành list[types.Tool] cho genai."""
-        if not self._decls:
-            return []
-        return [types.Tool(function_declarations=self._decls)]
+    def anthropic_tools(self) -> list[dict]:
+        return self._tools
+
+    def validate(self, name: str, args: Any) -> Optional[str]:
+        """None nếu hợp lệ; ngược lại là nội dung tool_result lỗi (INVALID_JSON)."""
+        props = self._props.get(name)
+        if props is None:
+            return f"Unknown tool: {name}"
+        ok = isinstance(args, dict) and set(args) == set(props) and all(
+            isinstance(args[k], _PY_CHECK[t]) and not (t != "boolean" and isinstance(args[k], bool))
+            for k, t in props.items()
+        )
+        if ok:
+            return None
+        return json.dumps({"INVALID_JSON": json.dumps(args, ensure_ascii=False)}, ensure_ascii=False)
 
     async def call(self, name: str, kwargs: dict) -> ToolResult:
         fn = self._fns.get(name)
@@ -64,4 +81,3 @@ class ToolRegistry:
             return ToolResult(name, True, result)
         except Exception as exc:
             return ToolResult(name, False, None, str(exc))
-

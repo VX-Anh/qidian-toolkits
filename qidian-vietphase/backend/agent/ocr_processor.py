@@ -1,17 +1,20 @@
 import asyncio
+import base64
 import re
 from pathlib import Path
 
+import anthropic
 import httpx
-from google import genai
-from google.genai import types
 
+from .base import fallback_kwargs
 from .orchestrator import parse_chapter_filename
+from .rate_limiter import get_rate_limiter
 from .state import EventQueue, SharedState
 
 OCR_PROMPT = (
     "These are sequential screenshots of a Chinese web novel chapter. "
     "Extract ALL Chinese text in reading order. "
+    "Consecutive screenshots overlap vertically: write each line only once. "
     "Preserve paragraph breaks with a blank line between paragraphs. "
     "Output ONLY the novel text — no commentary, no translation, no UI labels."
 )
@@ -34,6 +37,9 @@ def _parse_filename(tab_title: str, ocr_text: str, fallback: str = "ocr") -> str
     return (name[:150] or f"ocr_{fallback}") + '.txt'
 
 
+_MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
 async def run_ocr(
     job_id: str,
     novel_slug: str,
@@ -41,32 +47,42 @@ async def run_ocr(
     image_paths: list[Path],
     state: SharedState,
     event_queue: EventQueue,
-    client: genai.Client,
+    client: anthropic.AsyncAnthropic,
     settings,
     out_filename: str | None = None,
 ):
     try:
         await event_queue.put({"type": "ocr_progress", "step": "ocr",
-                               "msg": f"Đang OCR với Gemini ({settings.llm_vision_model})..."})
+                               "msg": f"Đang OCR với Claude ({settings.llm_vision_model})..."})
 
-        parts = [types.Part(text=OCR_PROMPT)] + [
-            types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg")
+        content = [
+            {"type": "image", "source": {
+                "type": "base64",
+                "media_type": _MEDIA_TYPES.get(p.suffix.lower(), "image/jpeg"),
+                "data": base64.standard_b64encode(p.read_bytes()).decode("ascii"),
+            }}
             for p in image_paths
-        ]
+        ] + [{"type": "text", "text": OCR_PROMPT}]   # ảnh trước, lời dặn sau
+
+        await get_rate_limiter().acquire(len(image_paths) * 1600 + 2000)
 
         text_chunks: list[str] = []
-        from .rate_limiter import get_rate_limiter
-        await get_rate_limiter().acquire(len(image_paths) * 1500 + 2000)
-        stream = await client.aio.models.generate_content_stream(
+        async with client.beta.messages.stream(
             model=settings.llm_vision_model,
-            contents=[types.Content(role="user", parts=parts)],
-            config=types.GenerateContentConfig(max_output_tokens=16000),
-        )
-        async for chunk in stream:
-            delta = chunk.text
-            if delta:
-                text_chunks.append(delta)
-                await event_queue.put({"type": "ocr_token", "text": delta})
+            max_tokens=settings.max_output_tokens,
+            output_config={"effort": "low"},   # chép chữ, không cần suy luận
+            messages=[{"role": "user", "content": content}],
+            **fallback_kwargs(settings.llm_vision_model),
+        ) as stream:
+            async for delta in stream.text_stream:
+                if delta:
+                    text_chunks.append(delta)
+                    await event_queue.put({"type": "ocr_token", "text": delta})
+            final = await stream.get_final_message()
+        if final.stop_reason == "refusal":
+            raise RuntimeError("Claude từ chối OCR các ảnh này")
+        if final.stop_reason == "max_tokens":
+            raise RuntimeError("Kết quả OCR bị cắt (MAX_OUTPUT_TOKENS) — gửi ít ảnh hơn mỗi lần")
 
         full_text = "".join(text_chunks).strip()
         await _finalize_ocr(job_id, novel_slug, chapter_title_hint, full_text,
@@ -237,7 +253,7 @@ async def run_paddle_ocr(
     image_paths: list[Path],
     state: SharedState,
     event_queue: EventQueue,
-    client: genai.Client,  # không dùng — giữ cùng chữ ký với run_ocr
+    client: anthropic.AsyncAnthropic,  # không dùng — giữ cùng chữ ký với run_ocr
     settings,
     out_filename: str | None = None,
 ):

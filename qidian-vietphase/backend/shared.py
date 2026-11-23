@@ -1,8 +1,7 @@
 """Shared singletons — dùng chung across toàn bộ app."""
 from pathlib import Path
 
-from google import genai
-from google.genai import types
+import anthropic
 
 from .agent.state import SharedState
 from .config import settings
@@ -11,55 +10,28 @@ _state = SharedState(str(settings.db_path))
 _relocated = _state.relocate_outputs(settings.output_dir)
 if _relocated:
     print(f"[db] trỏ lại {_relocated} bản dịch theo OUTPUT_DIR hiện tại", flush=True)
-_client: genai.Client | None = None
+_client: anthropic.AsyncAnthropic | None = None
 
 
 def get_state() -> SharedState:
     return _state
 
 
-def get_client() -> genai.Client:
-    """Native google-genai client trên Vertex AI.
-
-    Auth:
-    - Nếu GOOGLE_APPLICATION_CREDENTIALS trỏ tới file service-account JSON →
-      nạp tường minh từ file đó (không phụ thuộc os.environ, vì pydantic nạp .env
-      vào settings chứ không export ra môi trường process).
-    - Nếu không → rơi về ADC mặc định (gcloud login khi dev, attached SA trên GCE).
-    Dùng client.aio.* cho async.
-    """
+def get_client() -> anthropic.AsyncAnthropic:
+    """AsyncAnthropic dùng chung. Key lấy theo thứ tự: ANTHROPIC_API_KEY (env/.env),
+    rồi file ANTHROPIC_API_KEY_FILE. SDK tự thử lại 408/409/429/5xx + lỗi kết nối."""
     global _client
     if _client is None:
-        credentials = None
-        cred_path = settings.google_application_credentials
-        if cred_path:
-            # Đã chỉ định path thì PHẢI có file thật. Nếu mount sai / thiếu file,
-            # raise ngay lúc khởi tạo thay vì âm thầm rơi về ADC rồi lỗi mơ hồ
-            # tận lúc gọi model (khó trace, nhất là trong container).
-            if not Path(cred_path).is_file():
+        key = settings.anthropic_api_key.strip()
+        if not key and settings.anthropic_api_key_file:
+            path = Path(settings.anthropic_api_key_file)
+            if not path.is_file():
                 raise RuntimeError(
-                    f"GOOGLE_APPLICATION_CREDENTIALS trỏ tới file không tồn tại: {cred_path!r}. "
-                    "Kiểm tra lại đường dẫn / volume mount (vd secrets/gcp-sa.json)."
+                    f"ANTHROPIC_API_KEY_FILE trỏ tới file không tồn tại: {str(path)!r} "
+                    "— kiểm tra volume mount / secrets."
                 )
-            from google.oauth2 import service_account
-            credentials = service_account.Credentials.from_service_account_file(
-                cred_path,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
-            )
-        _client = genai.Client(
-            vertexai=True,
-            project=settings.gcp_project_id,
-            location=settings.gcp_location,
-            credentials=credentials,
-            # SDK mặc định KHÔNG retry. Bật retry có backoff mũ + jitter cho
-            # 408/429/5xx và lỗi timeout/kết nối — 429 thoáng qua không còn làm
-            # chương bị FAILED ngay.
-            http_options=types.HttpOptions(
-                retry_options=types.HttpRetryOptions(
-                    attempts=settings.llm_retry_attempts,
-                    initial_delay=2.0,
-                    max_delay=60.0,
-                ),
-            ),
-        )
+            key = path.read_text(encoding="utf-8").strip()
+        if not key:
+            raise RuntimeError("Chưa cấu hình Claude API key (ANTHROPIC_API_KEY hoặc ANTHROPIC_API_KEY_FILE)")
+        _client = anthropic.AsyncAnthropic(api_key=key, max_retries=settings.llm_retry_attempts)
     return _client

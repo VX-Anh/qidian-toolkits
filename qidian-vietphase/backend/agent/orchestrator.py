@@ -2,7 +2,7 @@ import asyncio
 import re
 from pathlib import Path
 
-from google import genai
+import anthropic
 
 from ..config import settings
 from .extractor import ExtractorAgent
@@ -31,7 +31,7 @@ class Orchestrator:
         rules_dir: Path,
         state: SharedState,
         event_queue: EventQueue,
-        client: genai.Client,
+        client: anthropic.AsyncAnthropic,
         chapter_filenames: list[str] | None = None,
         force: bool = False,
         run_wiki: bool = True,

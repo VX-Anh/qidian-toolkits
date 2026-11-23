@@ -3,7 +3,7 @@ import time
 
 
 class RateLimiter:
-    """Token bucket cho Gemini (Vertex) — giới hạn RPM và TPM, dùng chung toàn app."""
+    """Token bucket cho Claude API — giới hạn RPM và TPM, dùng chung toàn app."""
 
     def __init__(self, rpm: int = 500, tpm: int = 150_000):
         self._rpm = rpm
@@ -58,16 +58,18 @@ def get_rate_limiter() -> RateLimiter:
     return _shared
 
 
-def estimate_tokens(contents) -> int:
-    """Ước lượng thô số token input từ list types.Content (chữ Hán ~1 token/ký tự,
-    tiếng Việt ~1 token/3-4 ký tự → lấy chung len//2)."""
+def estimate_tokens(messages) -> int:
+    """Ước lượng thô số token input của list messages (chữ Hán ~1 token/ký tự, tiếng
+    Việt ~1 token/3-4 ký tự → lấy chung len//2). Chỉ để rate limit nội bộ."""
     n = 0
-    for c in contents or []:
-        for p in getattr(c, "parts", None) or []:
-            t = getattr(p, "text", None)
-            if t:
-                n += len(t)
-            fc = getattr(p, "function_call", None)
-            if fc is not None and getattr(fc, "args", None):
-                n += len(str(fc.args))
+    for m in messages or []:
+        content = m.get("content") if isinstance(m, dict) else None
+        if isinstance(content, str):
+            n += len(content)
+            continue
+        for block in content or []:
+            for attr in ("text", "content", "input", "thinking"):
+                v = block.get(attr) if isinstance(block, dict) else getattr(block, attr, None)
+                if v:
+                    n += len(v) if isinstance(v, str) else len(str(v))
     return n // 2 + 1000

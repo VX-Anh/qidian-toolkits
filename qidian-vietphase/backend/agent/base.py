@@ -1,9 +1,21 @@
+"""BaseAgent — vòng lặp ReAct trên Claude Messages API (streaming + tool use).
+
+Mỗi lượt: stream một response → nếu có tool_use thì chạy song song các tool, trả
+mọi tool_result trong MỘT user message → lặp tới khi model không gọi tool nữa.
+
+- Tool khai báo `eager_input_streaming` để nội dung save_chapter (rất dài) stream
+  ra UI ngay khi model viết. Khi đó server không validate input nữa → tự kiểm
+  input trước khi chạy tool (ToolRegistry.validate).
+- stop_reason `max_tokens` có tool_use → bản dịch bị cắt, KHÔNG chạy tool (raise);
+  `refusal` → raise. Orchestrator đánh FAILED với thông điệp rõ ràng.
+- Lịch sử giữ nguyên `response.content` (kể cả thinking / fallback block).
+"""
 import asyncio
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
-from google import genai
-from google.genai import types
+import anthropic
+import jiter
 
 from ..config import settings
 from .rate_limiter import estimate_tokens, get_rate_limiter
@@ -20,38 +32,35 @@ class AgentEvent:
         return {"agent": self.agent_id, "type": self.type, **self.data}
 
 
-def _frag_kv(frag) -> tuple[str, object, bool]:
-    """Giải mã 1 fragment partial_args của genai → (key, value, is_string).
+# Model có server-side refusal fallback ("default" = API tự chọn model thay thế theo
+# loại từ chối). Haiku 5.5 không có.
+_FALLBACK_MODELS = {"claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5",
+                    "claude-fable-5-1", "claude-fable-5-2"}
+_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
-    Fragment có json_path kiểu '$.content' và một trong các *_value đã decode sẵn.
-    Trả về is_string=True cho string_value (để nối chuỗi + stream live).
-    """
-    path = frag.json_path or ""
-    key = path[2:] if path.startswith("$.") else path
-    key = key.split(".")[0].strip("[]'\"")
-    if frag.string_value is not None:
-        return key, frag.string_value, True
-    if frag.number_value is not None:
-        return key, frag.number_value, False
-    if frag.bool_value is not None:
-        return key, frag.bool_value, False
-    if getattr(frag, "null_value", None) is not None:
-        return key, None, False
-    return key, None, False
+# Tool có tham số dài cần stream ra UI theo từng mảnh: tên tool → tên tham số.
+STREAMED_TOOL_FIELDS = {"save_chapter": "content"}
+
+_JSON_RETRIES = 2
+
+
+def fallback_kwargs(model: str) -> dict:
+    if model in _FALLBACK_MODELS:
+        return {"betas": [_FALLBACK_BETA], "fallbacks": "default"}
+    return {}
 
 
 class BaseAgent:
     MAX_ITER = 20
-    TOOL_CHOICE = "auto"  # auto | required | none
 
-    def __init__(self, agent_id: str, client: genai.Client, registry: ToolRegistry, model: str):
+    def __init__(self, agent_id: str, client: anthropic.AsyncAnthropic,
+                 registry: ToolRegistry, model: str):
         self.agent_id = agent_id
         self.client = client
         self.registry = registry
         self.model = model
-        # Lịch sử hội thoại dạng genai Content (giữ nguyên thought_signature trong
-        # các part function_call để Gemini 3 không lỗi 400 ở vòng tool đa lượt).
-        self.history: list[types.Content] = []
+        self.messages: list[dict] = []
+        self._final = None
 
     def _system_prompt(self) -> str:
         raise NotImplementedError
@@ -59,156 +68,123 @@ class BaseAgent:
     def _emit(self, type: str, **data) -> AgentEvent:
         return AgentEvent(agent_id=self.agent_id, type=type, data=data)
 
-    def _gen_config(self) -> types.GenerateContentConfig:
-        tools = self.registry.genai_tools()
-        if self.TOOL_CHOICE == "none" or not tools:
-            mode = types.FunctionCallingConfigMode.NONE
-        elif self.TOOL_CHOICE in ("required", "any"):
-            mode = types.FunctionCallingConfigMode.ANY
-        else:
-            mode = types.FunctionCallingConfigMode.AUTO
-
-        level = getattr(types.ThinkingLevel, settings.thinking_level.upper(),
-                        types.ThinkingLevel.LOW)
-
-        return types.GenerateContentConfig(
-            system_instruction=self._system_prompt(),
-            temperature=1.0,  # Gemini 3 khuyến nghị giữ mặc định 1.0
-            max_output_tokens=settings.max_output_tokens,
-            thinking_config=types.ThinkingConfig(thinking_level=level),
-            tools=tools or None,
-            tool_config=types.ToolConfig(
-                function_calling_config=types.FunctionCallingConfig(
-                    mode=mode,
-                    # Stream từng mảnh JSON arguments để hiện bản dịch live (save_chapter)
-                    stream_function_call_arguments=bool(tools),
-                )
-            ),
+    def _request_kwargs(self) -> dict:
+        kwargs = dict(
+            model=self.model,
+            max_tokens=settings.max_output_tokens,
+            # system + tools ổn định giữa các lượt → breakpoint trên system cache luôn
+            # tools (thứ tự render: tools → system → messages).
+            system=[{"type": "text", "text": self._system_prompt(),
+                     "cache_control": {"type": "ephemeral"}}],
+            # Tự cache lịch sử tới block cuối mỗi lượt (vòng tool gửi lại toàn bộ).
+            cache_control={"type": "ephemeral"},
+            output_config={"effort": settings.llm_effort},
+            messages=self.messages,
+            **fallback_kwargs(self.model),
         )
+        tools = self.registry.anthropic_tools()
+        if tools:
+            kwargs["tools"] = tools
+        return kwargs
 
-    async def run(self, user_message: str) -> AsyncIterator[AgentEvent]:
-        self.history = [
-            types.Content(role="user", parts=[types.Part(text=user_message)])
-        ]
-        config = self._gen_config()
+    async def _stream_turn(self) -> AsyncIterator[AgentEvent]:
+        """Stream một lượt, phát event token; response đầy đủ lưu ở self._final."""
+        current_tool: str | None = None
+        raw_json = ""
+        streamed_len = 0
+        async with self.client.beta.messages.stream(**self._request_kwargs()) as stream:
+            async for event in stream:
+                if event.type == "content_block_start":
+                    block = event.content_block
+                    current_tool = block.name if block.type == "tool_use" else None
+                    raw_json = ""
+                    streamed_len = 0
+                elif event.type == "text":
+                    if event.text:
+                        yield self._emit("token", text=event.text)
+                elif event.type == "input_json" and current_tool in STREAMED_TOOL_FIELDS:
+                    # event.snapshot bỏ chuỗi đang viết dở → tự ghép partial_json rồi parse
+                    # kiểu "trailing-strings" (giữ chuỗi dở) để phát phần chữ mới thêm.
+                    raw_json += event.partial_json
+                    try:
+                        snap = jiter.from_json(raw_json.encode(), partial_mode="trailing-strings")
+                    except ValueError:
+                        continue
+                    value = snap.get(STREAMED_TOOL_FIELDS[current_tool]) if isinstance(snap, dict) else None
+                    if isinstance(value, str) and len(value) > streamed_len:
+                        yield self._emit("token", text=value[streamed_len:])
+                        streamed_len = len(value)
+            self._final = await stream.get_final_message()
+
+    async def run(self, user_message) -> AsyncIterator[AgentEvent]:
+        self.messages = [{"role": "user", "content": user_message}]
 
         for iteration in range(self.MAX_ITER):
             yield self._emit("thinking", iteration=iteration)
+            await get_rate_limiter().acquire(estimate_tokens(self.messages))
 
-            await get_rate_limiter().acquire(estimate_tokens(self.history))
-            stream = await self.client.aio.models.generate_content_stream(
-                model=self.model,
-                contents=self.history,
-                config=config,
-            )
+            json_retries = 0
+            while True:
+                try:
+                    async for ev in self._stream_turn():
+                        yield ev
+                    break
+                except ValueError:
+                    # Input JSON của tool hỏng tới mức SDK không parse được: chưa có
+                    # tool_use_id để trả lỗi → gửi lại lượt này (có giới hạn).
+                    json_retries += 1
+                    if json_retries > _JSON_RETRIES:
+                        raise
+            response = self._final
 
-            full_text = ""
-            fcalls: list[dict] = []   # [{name, id, args, raw, sig}]
-            cur: dict | None = None   # call đang nhận partial args
-            pending_sig = None        # thought_signature chờ gắn vào function_call
-            streamed_content = False  # đã stream nội dung save_chapter chưa
-            finish_reason = None
-
-            async for chunk in stream:
-                if chunk.candidates and chunk.candidates[0].finish_reason:
-                    finish_reason = chunk.candidates[0].finish_reason
-                if not chunk.candidates or not chunk.candidates[0].content:
-                    continue
-                for part in (chunk.candidates[0].content.parts or []):
-                    sig = getattr(part, "thought_signature", None)
-                    if sig:
-                        pending_sig = sig
-
-                    fc = getattr(part, "function_call", None)
-                    if fc is not None:
-                        if fc.name:  # tên chỉ xuất hiện ở chunk đầu của mỗi call
-                            cur = {"name": fc.name, "id": fc.id or "",
-                                   "args": {}, "raw": None, "sig": None}
-                            fcalls.append(cur)
-                        if cur is not None:
-                            if pending_sig is not None:
-                                cur["sig"] = pending_sig
-                                pending_sig = None
-                            if fc.args:  # fallback non-stream: dict args đầy đủ
-                                cur["raw"] = dict(fc.args)
-                            # partial_args = list fragment {json_path, *_value}
-                            for frag in (fc.partial_args or []):
-                                key, val, is_str = _frag_kv(frag)
-                                if not key:
-                                    continue
-                                if is_str:
-                                    cur["args"][key] = cur["args"].get(key, "") + val
-                                    if cur["name"] == "save_chapter" and key == "content" and val:
-                                        streamed_content = True
-                                        yield self._emit("token", text=val)
-                                else:
-                                    cur["args"][key] = val
-                        continue
-
-                    # Part văn bản thường (bỏ qua thought summary)
-                    if getattr(part, "text", None) and not getattr(part, "thought", False):
-                        full_text += part.text
-                        yield self._emit("token", text=part.text)
-
-            # Chạm max_output_tokens giữa chừng → args của tool call (vd content của
-            # save_chapter) có thể chỉ là một nửa. Không thực thi, báo lỗi để chương
-            # bị đánh FAILED thay vì lưu bản dịch cụt rồi đánh DONE.
-            if fcalls and finish_reason == types.FinishReason.MAX_TOKENS:
+            tool_uses = [b for b in response.content if b.type == "tool_use"]
+            if response.stop_reason == "refusal":
+                detail = getattr(response, "stop_details", None)
+                cat = getattr(detail, "category", None) if detail else None
+                raise RuntimeError(f"Claude từ chối yêu cầu ({cat or 'không rõ lý do'})")
+            if response.stop_reason == "max_tokens" and tool_uses:
+                # Input tool bị cắt vẫn parse ra object "hợp lệ" một nửa → không chạy.
                 raise RuntimeError(
                     "Output bị cắt do chạm MAX_OUTPUT_TOKENS "
                     f"({settings.max_output_tokens}) — tăng MAX_OUTPUT_TOKENS hoặc chia nhỏ chương"
                 )
 
-            # Không có tool call → model đã trả lời xong
-            if not fcalls:
-                self.history.append(types.Content(
-                    role="model", parts=[types.Part(text=full_text)]))
-                yield self._emit("done", content=full_text)
+            self.messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason == "pause_turn":
+                continue
+            if not tool_uses:
+                text = "".join(b.text for b in response.content if b.type == "text")
+                yield self._emit("done", content=text)
                 return
 
-            # Resolve arguments cuối: ưu tiên dict đầy đủ, fallback dict tái tạo từ fragment
-            for c in fcalls:
-                c["final"] = c["raw"] if c["raw"] is not None else c["args"]
+            yield self._emit("tool_call", tools=[b.name for b in tool_uses])
 
-            # Tái tạo turn của model — giữ thought_signature trên part function_call
-            model_parts: list[types.Part] = []
-            if full_text:
-                model_parts.append(types.Part(text=full_text))
-            for c in fcalls:
-                model_parts.append(types.Part(
-                    function_call=types.FunctionCall(
-                        name=c["name"], args=c["final"], id=c["id"] or None),
-                    thought_signature=c["sig"],
-                ))
-            self.history.append(types.Content(role="model", parts=model_parts))
+            async def run_one(block):
+                invalid = self.registry.validate(block.name, block.input)
+                if invalid:
+                    return None, invalid
+                return await self.registry.call(block.name, block.input), None
 
-            # Nếu save_chapter không stream partial (model trả args 1 lần) → emit content 1 lần
-            if not streamed_content:
-                for c in fcalls:
-                    if c["name"] == "save_chapter" and isinstance(c["final"], dict):
-                        content = c["final"].get("content")
-                        if content:
-                            yield self._emit("token", text=content)
+            outcomes = await asyncio.gather(*[run_one(b) for b in tool_uses])
 
-            yield self._emit("tool_call", tools=[c["name"] for c in fcalls])
-
-            # Thực thi tất cả tool calls song song
-            results = await asyncio.gather(*[
-                self.registry.call(c["name"], c["final"]) for c in fcalls
-            ])
-
-            tool_parts = [
-                types.Part.from_function_response(name=c["name"], response=r.to_response())
-                for c, r in zip(fcalls, results)
-            ]
-            self.history.append(types.Content(role="tool", parts=tool_parts))
-
-            for c, result in zip(fcalls, results):
+            tool_results = []
+            for block, (result, invalid) in zip(tool_uses, outcomes):
+                if invalid:
+                    tool_results.append({"type": "tool_result", "tool_use_id": block.id,
+                                         "is_error": True, "content": invalid})
+                    yield self._emit("tool_result", tool=block.name, success=False, preview=invalid)
+                    continue
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id,
+                                     "is_error": not result.success,
+                                     "content": result.to_content()})
                 yield self._emit(
                     "tool_result",
-                    tool=c["name"],
+                    tool=block.name,
                     success=result.success,
                     preview=str(result.data)[:300] if result.success else result.error,
                 )
+            # Mọi tool_result trong MỘT user message (tách ra làm model ngừng gọi song song).
+            self.messages.append({"role": "user", "content": tool_results})
 
         yield self._emit("max_iter", limit=self.MAX_ITER)
