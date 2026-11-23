@@ -42,6 +42,14 @@ uv run uvicorn backend.main:app --reload --reload-include "*.html" --reload-incl
 
 Mở giao diện: http://127.0.0.1:9999
 
+Khi sửa frontend, đặt `DEV_MODE=true` trong `.env`: trang dùng Babel trong trình duyệt
+(sửa `.jsx` là thấy ngay) và tự reload khi server restart. Khi `DEV_MODE` tắt mà đã có
+bản build thì server phục vụ bản build sẵn:
+
+```bash
+node frontend/build.mjs   # cần Node ≥18; Docker image tự chạy bước này
+```
+
 > **Lưu ý (Windows):** dùng `127.0.0.1` thay vì `localhost`. Trên Windows `localhost` thường resolve sang IPv6 (`::1`) trong khi server bind IPv4 nên có thể bị từ chối kết nối.
 
 ## Cấu hình mỗi truyện
