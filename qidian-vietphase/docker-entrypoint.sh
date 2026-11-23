@@ -6,6 +6,8 @@ if [ "$(id -u)" = "0" ]; then
     # Sửa quyền trước khi drop privilege để SQLite ghi được state.db và extractor /
     # trang Settings ghi được novel.md (khi RULES_DIR là thư mục mount ngoài /app).
     chown -R app:app /data 2>/dev/null || true
+    # Volume giữ đăng nhập Claude CLI (TRANSLATE_PROVIDER=cli) mount vào home của app.
+    chown app:app /home/app 2>/dev/null || true
     case "${RULES_DIR:-}" in
         /app/*|"") ;;
         /*) [ -d "$RULES_DIR" ] && chown -R app:app "$RULES_DIR" 2>/dev/null || true ;;
@@ -19,6 +21,8 @@ if [ "$(id -u)" = "0" ]; then
         export ANTHROPIC_API_KEY_FILE=/run/vietphase/anthropic_api_key
     fi
 
+    # runuser không đổi HOME → đặt về home của app để Claude CLI đọc đúng đăng nhập.
+    export HOME=/home/app
     exec runuser -u app -- "$@"
 fi
 

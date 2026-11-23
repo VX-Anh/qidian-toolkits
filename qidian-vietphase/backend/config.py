@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     # Mức suy nghĩ: low | medium | high | xhigh | max. Dịch truyện không cần suy
     # luận sâu → low (nhanh, rẻ); tăng nếu thấy chất lượng chưa đạt.
     llm_effort: str = "low"
+    # Dịch chương qua: "api" (Claude API, key ở trên) | "cli" (Claude Code CLI `claude -p`
+    # headless, dùng gói đăng ký đã đăng nhập trong CLI). Trích thuật ngữ, review, wiki,
+    # OCR luôn đi API.
+    translate_provider: str = "api"
+    cli_bin: str = "claude"
+    # Model cho CLI; rỗng = MODEL_TRANSLATE. CLI_EFFORT rỗng = mặc định của CLI.
+    cli_model: str = ""
+    cli_effort: str = ""
+    # Quá thời gian (giây) một chương → coi như CLI lỗi.
+    cli_timeout: int = 900
+    # CLI lỗi (chưa đăng nhập, hết hạn mức, quá giờ) → dịch lại chương đó bằng API.
+    cli_fallback_api: bool = True
     # Streaming nên đặt rộng (chương dài + phần thinking); chạm trần → chương FAILED.
     max_output_tokens: int = 64000
 
