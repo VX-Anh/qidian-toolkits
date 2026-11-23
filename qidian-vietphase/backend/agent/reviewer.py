@@ -75,14 +75,16 @@ class ReviewerAgent(BaseAgent):
         return (
             "Bạn là biên tập viên kiểm duyệt bản dịch tiểu thuyết tiên hiệp Trung-Việt.\n"
             "Nhiệm vụ: đọc bản dịch, đối chiếu nguyên bản, kiểm tra chất lượng.\n\n"
-            "Tiêu chí kiểm tra:\n"
-            "1. Thuật ngữ: tên nhân vật/địa danh/cảnh giới/kỹ năng có khớp bảng thuật ngữ không\n"
-            "2. Đầy đủ: có đoạn văn nào bị bỏ sót hoặc còn để tiếng Trung không\n"
-            "3. Văn phong: trang trọng, nhiều Hán Việt, không dùng từ hiện đại/thông tục\n"
-            "4. Cấu trúc: số đoạn văn tiếng Việt có tương ứng nguyên bản không\n\n"
+            "Tên riêng đã được hệ thống kiểm và sửa riêng theo bảng thuật ngữ — KHÔNG chấm "
+            "lỗi về tên riêng, kể cả tên chưa có trong bảng.\n\n"
+            "Chỉ chấm 'needs_fix' khi có ít nhất một lỗi rõ ràng:\n"
+            "1. Sót: một đoạn hay câu của nguyên bản không có trong bản dịch\n"
+            "2. Còn chữ Hán chưa dịch trong bản dịch\n"
+            "3. Sai nghĩa rõ: dịch ngược nghĩa, nhầm người nói/hành động, sai số liệu\n"
+            "Văn phong chưa mượt, chọn từ khác, gộp/tách đoạn hợp lý KHÔNG phải lỗi.\n\n"
             "Kết quả:\n"
             "- Nếu ổn: save_review(status='ok', issues='')\n"
-            "- Nếu có vấn đề: save_review(status='needs_fix', issues='mô tả chi tiết từng lỗi')"
+            "- Nếu có lỗi: save_review(status='needs_fix', issues='từng lỗi: trích câu gốc → câu dịch → sửa thế nào')"
         )
 
     async def run(self, _: str = "") -> AsyncIterator[AgentEvent]:
@@ -91,7 +93,7 @@ class ReviewerAgent(BaseAgent):
             "1. Gọi get_glossary() để nắm bảng thuật ngữ\n"
             "2. Gọi read_source() để đọc nguyên bản tiếng Trung\n"
             "3. Gọi read_translation() để đọc bản dịch tiếng Việt\n"
-            "4. Đối chiếu và kiểm tra theo 4 tiêu chí\n"
+            "4. Đối chiếu và kiểm tra theo 3 tiêu chí\n"
             "5. Gọi save_review() với kết quả"
         )
         async for event in super().run(user_msg):

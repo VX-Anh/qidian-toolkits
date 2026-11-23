@@ -29,7 +29,7 @@ from ..config import settings
 from .base import AgentEvent
 from .novel_loader import NovelProfile
 from .state import SharedState
-from .translator import _make_registry
+from .translator import _make_registry, prev_summary
 
 OPEN_TAG = "<ban_dich>"
 CLOSE_TAG = "</ban_dich>"
@@ -153,7 +153,7 @@ def build_prompt(filename: str, content: str, prev_summary: str | None,
     return "\n".join(parts)
 
 
-def cli_command(system_prompt_file: str) -> list[str]:
+def cli_command(system_prompt_file: str, model: str | None = None) -> list[str]:
     cmd = [
         settings.cli_bin, "-p",            # prompt qua stdin
         "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -161,7 +161,7 @@ def cli_command(system_prompt_file: str) -> list[str]:
         "--strict-mcp-config",             # không nạp MCP server nào
         "--setting-sources", "",           # bỏ settings/hook của máy
         "--no-session-persistence",
-        "--model", settings.cli_model or settings.llm_model,
+        "--model", model or settings.cli_model or settings.llm_model,
         # Qua file: glossary lớn vượt giới hạn một đối số dòng lệnh (Windows ~32K ký tự,
         # Linux 128 KiB).
         "--system-prompt-file", system_prompt_file,
@@ -169,6 +169,95 @@ def cli_command(system_prompt_file: str) -> list[str]:
     if settings.cli_effort:
         cmd += ["--effort", settings.cli_effort]
     return cmd
+
+
+async def cli_stream(system_prompt: str, prompt: str,
+                     model: str | None = None) -> AsyncIterator[tuple[str, str]]:
+    """Chạy `claude -p` một lượt: phát ("delta", chữ) khi model viết, cuối cùng ("final", toàn văn).
+
+    Lỗi chạy CLI (không chạy được, mã thoát ≠ 0, kết quả lỗi, quá giờ) → CliUnavailable.
+    """
+    final_text: str | None = None
+    result_error: str | None = None
+    # cwd là thư mục tạm rỗng: CLI không thấy mã nguồn/dữ liệu (dù không có tool).
+    with tempfile.TemporaryDirectory(prefix="vp-cli-") as cwd:
+        sp_file = Path(cwd) / "system-prompt.txt"
+        sp_file.write_text(system_prompt, encoding="utf-8")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cli_command(str(sp_file), model),
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, cwd=cwd, limit=_LINE_LIMIT,
+                env=cli_env(),
+            )
+        except (OSError, NotImplementedError) as exc:
+            # NotImplementedError: event loop không hỗ trợ subprocess (Windows + uvicorn
+            # --reload dùng SelectorEventLoop) → chạy server không --reload khi dùng CLI.
+            raise CliUnavailable(f"Không chạy được Claude CLI ({settings.cli_bin}): "
+                                 f"{type(exc).__name__}: {exc}") from exc
+
+        stderr_task = asyncio.create_task(proc.stderr.read())   # type: ignore[union-attr]
+        try:
+            async with asyncio.timeout(settings.cli_timeout):
+                try:
+                    proc.stdin.write(prompt.encode("utf-8"))    # type: ignore[union-attr]
+                    await proc.stdin.drain()                    # type: ignore[union-attr]
+                    proc.stdin.close()                          # type: ignore[union-attr]
+                except (BrokenPipeError, ConnectionResetError):
+                    # CLI thoát trước khi đọc hết prompt (vd chưa đăng nhập): đọc tiếp
+                    # stdout/stderr, mã thoát ≠ 0 bên dưới thành CliUnavailable.
+                    pass
+                async for raw in proc.stdout:                   # type: ignore[union-attr]
+                    try:
+                        msg = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if not isinstance(msg, dict):
+                        continue
+                    kind = msg.get("type")
+                    if kind == "stream_event":
+                        ev = msg.get("event") or {}
+                        delta = ev.get("delta") or {}
+                        if ev.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+                            if delta.get("text"):
+                                yield "delta", delta["text"]
+                    elif kind == "assistant":
+                        blocks = (msg.get("message") or {}).get("content") or []
+                        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+                        if text:
+                            final_text = text
+                    elif kind == "result":
+                        if msg.get("is_error") or msg.get("subtype") != "success":
+                            result_error = str(msg.get("result") or msg.get("subtype") or "lỗi không rõ")
+                        elif isinstance(msg.get("result"), str) and msg["result"]:
+                            final_text = msg["result"]
+                await proc.wait()
+        except TimeoutError:
+            raise CliUnavailable(f"Claude CLI quá {settings.cli_timeout} giây") from None
+        except (ValueError, asyncio.LimitOverrunError) as exc:
+            # Một dòng stream-json vượt _LINE_LIMIT.
+            raise CliUnavailable(f"Đọc output Claude CLI lỗi: {exc}") from exc
+        finally:
+            # Mọi đường thoát (timeout, huỷ, lỗi lạ, generator bị đóng sớm): không để
+            # tiến trình CLI chạy mồ côi, rồi mới chờ stderr (EOF khi tiến trình đã chết).
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            stderr = (await stderr_task).decode("utf-8", "replace")[-_STDERR_TAIL:]
+
+    if result_error or proc.returncode != 0 or final_text is None:
+        detail = result_error or stderr.strip() or f"mã thoát {proc.returncode}"
+        raise CliUnavailable(f"Claude CLI lỗi: {detail[:500]}")
+    yield "final", final_text
+
+
+async def cli_complete(system_prompt: str, prompt: str, model: str | None = None) -> str:
+    """Một lượt CLI, chỉ lấy toàn văn kết quả."""
+    final = ""
+    async for kind, text in cli_stream(system_prompt, prompt, model):
+        if kind == "final":
+            final = text
+    return final
 
 
 class CliTranslatorAgent:
@@ -181,6 +270,7 @@ class CliTranslatorAgent:
         state: SharedState,
         output_dir: Path,
         review_issues: str | None = None,
+        source_raw: str | None = None,
     ):
         self.agent_id = f"translator:{filename}"
         self.filename = filename
@@ -189,98 +279,26 @@ class CliTranslatorAgent:
         self.profile = profile
         self.state = state
         self.review_issues = review_issues
+        self.source_raw = source_raw   # bản gốc chưa thay tên: lọc bảng thuật ngữ trong prompt
         self.registry = _make_registry(state, filename, novel_slug, output_dir, profile)
 
     def _emit(self, type: str, **data) -> AgentEvent:
         return AgentEvent(agent_id=self.agent_id, type=type, data=data)
 
-    def _prev_summary(self) -> str | None:
-        info = self.state.get_chapter(self.filename) or {}
-        num = info.get("chapter_num") or 0
-        if num <= 1:
-            return None
-        for c in self.state.get_chapters(self.novel_slug):
-            if c.get("chapter_num") == num - 1:
-                return self.state.get_summary(c["filename"])
-        return None
-
     async def run(self) -> AsyncIterator[AgentEvent]:
         yield self._emit("thinking", iteration=0, provider="cli")
-        prompt = build_prompt(self.filename, self.content, self._prev_summary(), self.review_issues)
+        prompt = build_prompt(self.filename, self.content,
+                              prev_summary(self.state, self.filename, self.novel_slug),
+                              self.review_issues)
         streamer = BanDichStreamer()
-        final_text: str | None = None
-        result_error: str | None = None
-
-        # cwd là thư mục tạm rỗng: CLI không thấy mã nguồn/dữ liệu (dù không có tool).
-        with tempfile.TemporaryDirectory(prefix="vp-cli-") as cwd:
-            sp_file = Path(cwd) / "system-prompt.txt"
-            sp_file.write_text(self.profile.system_prompt(), encoding="utf-8")
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cli_command(str(sp_file)),
-                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE, cwd=cwd, limit=_LINE_LIMIT,
-                    env=cli_env(),
-                )
-            except (OSError, NotImplementedError) as exc:
-                # NotImplementedError: event loop không hỗ trợ subprocess (Windows + uvicorn
-                # --reload dùng SelectorEventLoop) → chạy server không --reload khi dùng CLI.
-                raise CliUnavailable(f"Không chạy được Claude CLI ({settings.cli_bin}): "
-                                     f"{type(exc).__name__}: {exc}") from exc
-
-            stderr_task = asyncio.create_task(proc.stderr.read())   # type: ignore[union-attr]
-            try:
-                async with asyncio.timeout(settings.cli_timeout):
-                    try:
-                        proc.stdin.write(prompt.encode("utf-8"))    # type: ignore[union-attr]
-                        await proc.stdin.drain()                    # type: ignore[union-attr]
-                        proc.stdin.close()                          # type: ignore[union-attr]
-                    except (BrokenPipeError, ConnectionResetError):
-                        # CLI thoát trước khi đọc hết prompt (vd chưa đăng nhập): đọc tiếp
-                        # stdout/stderr, mã thoát ≠ 0 bên dưới thành CliUnavailable.
-                        pass
-                    async for raw in proc.stdout:                   # type: ignore[union-attr]
-                        try:
-                            msg = json.loads(raw)
-                        except ValueError:
-                            continue
-                        if not isinstance(msg, dict):
-                            continue
-                        kind = msg.get("type")
-                        if kind == "stream_event":
-                            ev = msg.get("event") or {}
-                            delta = ev.get("delta") or {}
-                            if ev.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
-                                piece = streamer.feed(delta.get("text") or "")
-                                if piece:
-                                    yield self._emit("token", text=piece)
-                        elif kind == "assistant":
-                            blocks = (msg.get("message") or {}).get("content") or []
-                            text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
-                            if text:
-                                final_text = text
-                        elif kind == "result":
-                            if msg.get("is_error") or msg.get("subtype") != "success":
-                                result_error = str(msg.get("result") or msg.get("subtype") or "lỗi không rõ")
-                            elif isinstance(msg.get("result"), str) and msg["result"]:
-                                final_text = msg["result"]
-                    await proc.wait()
-            except TimeoutError:
-                raise CliUnavailable(f"Claude CLI quá {settings.cli_timeout} giây") from None
-            except (ValueError, asyncio.LimitOverrunError) as exc:
-                # Một dòng stream-json vượt _LINE_LIMIT.
-                raise CliUnavailable(f"Đọc output Claude CLI lỗi: {exc}") from exc
-            finally:
-                # Mọi đường thoát (timeout, huỷ, lỗi lạ, generator bị đóng sớm): không để
-                # tiến trình CLI chạy mồ côi, rồi mới chờ stderr (EOF khi tiến trình đã chết).
-                if proc.returncode is None:
-                    proc.kill()
-                    await proc.wait()
-                stderr = (await stderr_task).decode("utf-8", "replace")[-_STDERR_TAIL:]
-
-        if result_error or proc.returncode != 0 or final_text is None:
-            detail = result_error or stderr.strip() or f"mã thoát {proc.returncode}"
-            raise CliUnavailable(f"Claude CLI lỗi: {detail[:500]}")
+        final_text = ""
+        async for kind, text in cli_stream(self.profile.system_prompt(only_in=self.source_raw), prompt):
+            if kind == "delta":
+                piece = streamer.feed(text)
+                if piece:
+                    yield self._emit("token", text=piece)
+            else:
+                final_text = text
 
         parsed = parse_output(final_text)
         yield self._emit("tool_call", tools=["save_chapter", "save_summary"], provider="cli")

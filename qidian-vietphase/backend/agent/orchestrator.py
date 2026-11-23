@@ -11,6 +11,8 @@ from .preprocessor import replace_proper_nouns
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
 from .cli_translator import CliTranslatorAgent, CliUnavailable
+from .name_check import check_chapter_file
+from .name_scout import scout_chapter
 from .translator import TranslatorAgent
 from .wiki_agent import WikiAgent
 
@@ -76,6 +78,12 @@ class Orchestrator:
             await self._emit("orchestrator", "queued", count=len(files))
             print(f"[dịch] ▶ BẮT ĐẦU dịch '{profile.vi_name}' — {len(files)} chương "
                   f"(song song {settings.concurrency})", flush=True)
+
+            # Dò tên riêng mới TRƯỚC khi dịch, lần lượt theo thứ tự chương: tên chốt ở
+            # chương trước đã nằm trong bảng khi dò chương sau, và lúc dịch mọi tên đều
+            # được thay sẵn sang tên Việt chuẩn → nhất quán giữa các chương.
+            if settings.name_scout:
+                profile = await self._scout(files, profile)
 
             # Dịch song song với semaphore
             sem = asyncio.Semaphore(settings.concurrency)
@@ -188,8 +196,8 @@ class Orchestrator:
             print(f"[dịch]   → bắt đầu: {filename}", flush=True)
 
             try:
-                content = path.read_text(encoding="utf-8")
-                content, substitutions = replace_proper_nouns(content, profile)
+                raw = path.read_text(encoding="utf-8")
+                content, substitutions = replace_proper_nouns(raw, profile)
                 if substitutions:
                     await self._emit("translator", "preprocess", file=filename, count=len(substitutions))
                 review = self.state.get_chapter_review(filename)
@@ -208,6 +216,7 @@ class Orchestrator:
                         state=self.state,
                         output_dir=self.output_dir,
                         review_issues=review_issues,
+                        source_raw=raw,
                     )
                     try:
                         async for event in cli_agent.run():
@@ -231,6 +240,7 @@ class Orchestrator:
                         client=self.client,
                         output_dir=self.output_dir,
                         review_issues=review_issues,
+                        source_raw=raw,
                     )
                     async for event in agent.run():
                         await self.event_queue.put(event.to_dict())
@@ -252,6 +262,7 @@ class Orchestrator:
 
                 final = self.state.get_chapter(filename)
                 if final and final["status"] == ChapterStatus.DONE:
+                    await self._check_names(final, path)
                     print(f"[dịch]   ✓ xong: {filename}", flush=True)
                 else:
                     print(f"[dịch]   ✗ thất bại: {filename}", flush=True)
@@ -271,6 +282,41 @@ class Orchestrator:
                 await self.state.set_status(filename, ChapterStatus.FAILED, error=str(exc))
                 await self._emit("translator", "error", file=filename, error=str(exc))
                 print(f"[dịch]   ✗ lỗi: {filename} — {exc}", flush=True)
+
+    async def _scout(self, files: list[Path], profile: NovelProfile) -> NovelProfile:
+        targets = [p for p in files if self.force
+                   or (self.state.get_chapter(p.name) or {}).get("status") != ChapterStatus.DONE]
+        if not targets:
+            return profile
+        await self._emit("orchestrator", "scouting", count=len(targets))
+        for path in targets:
+            num, _ = parse_chapter_filename(path.name)
+            try:
+                added = await scout_chapter(path.read_text(encoding="utf-8"), profile,
+                                            self.rules_dir, self.novel_slug, num, self.client)
+                await self._emit("scout", "done", file=path.name,
+                                 added=[f"{n.zh} → {n.vi}" for n in added])
+                if added:
+                    print(f"[dịch]   + {len(added)} tên mới: {path.name}", flush=True)
+                    profile = load_novel(self.rules_dir, self.novel_slug)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Dò tên lỗi không chặn dịch: chương vẫn dịch với bảng hiện có.
+                await self._emit("scout", "error", file=path.name, error=str(exc)[:300])
+                print(f"[dịch]   ! dò tên lỗi: {path.name} — {exc}", flush=True)
+        return profile
+
+    async def _check_names(self, chapter: dict, path: Path) -> None:
+        """Kiểm + tự sửa tên trong bản dịch vừa lưu (bảng mới nhất). Lỗi không làm hỏng chương."""
+        try:
+            profile = load_novel(self.rules_dir, self.novel_slug)
+            res = await check_chapter_file(self.state, chapter, path, profile)
+            if res is not None:
+                await self._emit("names", "checked", file=chapter["filename"],
+                                 fixed=res.fixed_count, issues=len(res.issues))
+        except Exception as exc:
+            await self._emit("names", "error", file=chapter["filename"], error=str(exc)[:300])
 
     def _collect_files(self) -> list[Path]:
         # input_dir là thư mục phẳng dùng chung cho mọi truyện → chỉ lấy file đã

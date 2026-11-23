@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import Scope
 
 from .config import settings
-from .routers import chapters, novels, ocr, translate, wiki
+from .routers import chapters, names, novels, ocr, translate, wiki
 
 log = logging.getLogger("vietphase")
 
@@ -164,6 +164,7 @@ app.include_router(chapters.router)
 app.include_router(translate.router)
 app.include_router(ocr.router)
 app.include_router(wiki.router)
+app.include_router(names.router)
 
 FRONTEND = Path(__file__).parent.parent / "frontend"
 

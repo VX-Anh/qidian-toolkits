@@ -776,8 +776,48 @@ function App() {
       await loadGlossary(currentSlug);
       await loadNovelMd(currentSlug);
       setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
+      if (oldItem.vi && oldItem.vi.trim() !== newItem.vi.trim()) {
+        await offerRenameInChapters(oldItem.vi.trim(), newItem.vi.trim());
+      }
     } catch (err) {
       setToast({ msg: `Lỗi sửa thuật ngữ: ${err.message}`, type: "error" });
+    }
+  }
+
+  // Đổi tên Việt trong bảng → hỏi áp dụng cho các chương đã dịch (có sao lưu phía server).
+  async function offerRenameInChapters(oldVi, newVi) {
+    const slug = currentSlug;
+    const base = `/api/names/${encodeURIComponent(slug)}/rename`;
+    try {
+      const pv = await api.post(`${base}/preview`, { old_vi: oldVi, new_vi: newVi });
+      if (!pv.total) return;
+      const list = pv.chapters.slice(0, 8).map(c => `• Chương ${c.chapter_num}: ${c.count} chỗ`).join("\n");
+      const more = pv.chapters.length > 8 ? `\n… và ${pv.chapters.length - 8} chương khác` : "";
+      if (!window.confirm(
+        `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}\n\nBản dịch cũ được sao lưu trên máy chủ.`
+      )) return;
+      const r = await api.post(`${base}/apply`, { old_vi: oldVi, new_vi: newVi });
+      await loadChapters(slug);
+      setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
+    } catch (err) {
+      setToast({ msg: `Lỗi đổi tên trong các chương: ${err.message}`, type: "error" });
+    }
+  }
+
+  // Kiểm + tự sửa tên riêng cho mọi chương đã dịch của truyện.
+  async function onCheckNames() {
+    if (!currentSlug) return;
+    const slug = currentSlug;
+    try {
+      setToast({ msg: "Đang kiểm tên riêng…", type: "info" });
+      const r = await api.post(`/api/names/${encodeURIComponent(slug)}/check`, {});
+      await loadChapters(slug);
+      setToast({
+        msg: `Đã kiểm ${r.checked} chương: tự sửa ${r.fixed} chỗ, ${r.issues} vấn đề cần xem`,
+        type: r.issues ? "info" : "success",
+      });
+    } catch (err) {
+      setToast({ msg: `Lỗi kiểm tên: ${err.message}`, type: "error" });
     }
   }
 
@@ -1046,6 +1086,7 @@ function App() {
               onSelectAll={selectAll}
               onClearSel={clearSel}
               onTranslateAll={() => startTranslation(null)}
+              onCheckNames={onCheckNames}
               onTranslateSelected={() => {
                 const selected = Object.keys(checked).filter(k => checked[k]);
                 startTranslation(selected);

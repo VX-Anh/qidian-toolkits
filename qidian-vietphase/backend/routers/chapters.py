@@ -62,6 +62,11 @@ def list_chapters(novel_slug: str | None = None):
             rev = reviews.get(ch["filename"])
             ch["review_status"] = rev["status"] if rev else None
             ch["review_issues"] = rev["issues"] if rev else None
+        names = state.get_name_checks(novel_slug)
+        for ch in chapters:
+            nc = names.get(ch["filename"])
+            ch["name_fixed"] = sum(f.get("count", 0) for f in nc["fixes"]) if nc else 0
+            ch["name_issues"] = nc["issues"] if nc else []
     return chapters
 
 

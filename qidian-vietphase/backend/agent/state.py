@@ -99,6 +99,16 @@ class SharedState:
             );
         """)
         self._conn.commit()
+        # Kết quả kiểm tên riêng (name_check.py) của từng chương: số chỗ đã tự sửa + vấn đề.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS name_checks (
+                filename    TEXT PRIMARY KEY,
+                novel_slug  TEXT,
+                fixes       TEXT DEFAULT '[]',
+                issues      TEXT DEFAULT '[]',
+                checked_at  TEXT DEFAULT (datetime('now'))
+            )""")
+        self._conn.commit()
         try:
             self._conn.execute("ALTER TABLE chapters ADD COLUMN ocr_job_id TEXT")
             self._conn.commit()
@@ -261,6 +271,31 @@ class SharedState:
                 [filename, novel_slug, status, issues],
             )
             self._conn.commit()
+
+    async def save_name_check(self, filename: str, novel_slug: str, fixes: list, issues: list):
+        with self._tlock:
+            self._conn.execute(
+                """INSERT INTO name_checks(filename, novel_slug, fixes, issues)
+                   VALUES(?,?,?,?)
+                   ON CONFLICT(filename) DO UPDATE SET
+                       novel_slug=excluded.novel_slug, fixes=excluded.fixes,
+                       issues=excluded.issues, checked_at=datetime('now')""",
+                [filename, novel_slug, json.dumps(fixes, ensure_ascii=False),
+                 json.dumps(issues, ensure_ascii=False)],
+            )
+            self._conn.commit()
+
+    def get_name_checks(self, novel_slug: str) -> dict[str, dict]:
+        with self._tlock:
+            rows = self._conn.execute(
+                "SELECT * FROM name_checks WHERE novel_slug=?", [novel_slug]).fetchall()
+        out = {}
+        for r in rows:
+            d = dict(r)
+            d["fixes"] = json.loads(d["fixes"] or "[]")
+            d["issues"] = json.loads(d["issues"] or "[]")
+            out[d["filename"]] = d
+        return out
 
     def get_reviews(self, novel_slug: Optional[str] = None) -> list[dict]:
         with self._tlock:

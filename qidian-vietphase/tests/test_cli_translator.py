@@ -103,7 +103,7 @@ class RunTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run(self, mode: str, content: str = "原文", prompt: str = "Dịch."):
-        def cmd(sp_file):
+        def cmd(sp_file, *_a):
             self.system_prompt_seen = Path(sp_file).read_text(encoding="utf-8")
             return [sys.executable, str(self.dir / "fake_cli.py"), mode, str(self.dir / "reply.txt")]
         ct.cli_command = cmd
@@ -164,7 +164,7 @@ class RunTest(unittest.TestCase):
             self._run("quota")
 
     def test_missing_binary_is_unavailable(self):
-        ct.cli_command = lambda _sp: [str(self.dir / "khong-co-lenh")]
+        ct.cli_command = lambda *_a: [str(self.dir / "khong-co-lenh")]
         profile = NovelProfile(slug="truyen", zh_name="", vi_name="Truyện", genre="", style="", custom_prompt="Dịch.")
         agent = ct.CliTranslatorAgent(self.fn, "原文", "truyen", profile, self.state, self.dir / "out")
 
