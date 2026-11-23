@@ -1,5 +1,7 @@
 import asyncio
+import threading
 import uuid
+from contextlib import contextmanager
 
 from fastapi import Depends, APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -17,11 +19,45 @@ router = APIRouter(prefix="/api/translate", tags=["translate"], dependencies=[De
 jobs = JobRegistry()
 
 
+# Thao tác tên riêng đang chạy theo truyện (kiểm tên, đổi tên, hoàn tác): ghi file bản dịch
+# + novel.md → loại trừ với job dịch/trích thuật ngữ của cùng truyện. _BUSY_LOCK bảo vệ cả
+# bước "kiểm rảnh + đăng ký job/thao tác" để hai bên không cùng lọt qua.
+_BUSY: dict[str, str] = {}
+_BUSY_LOCK = threading.Lock()
+
+
 def _ensure_idle(slug: str) -> None:
     """Một truyện chỉ chạy một job dịch/extractor tại một thời điểm — hai job cùng
     ghi novel.md và trạng thái chương sẽ dẫm lên nhau."""
     if jobs.running(novel_slug=slug, kind="translate"):
         raise HTTPException(409, "Truyện này đang có job dịch/trích thuật ngữ chạy — đợi xong hoặc huỷ trước")
+    if slug in _BUSY:
+        raise HTTPException(409, f"Truyện này đang {_BUSY[slug]} — đợi xong rồi thử lại")
+
+
+def _add_job(slug: str, job_id: str, eq, coro) -> None:
+    """Kiểm rảnh lần cuối + tạo task + đăng ký job, nguyên tử với novel_busy()."""
+    with _BUSY_LOCK:
+        try:
+            _ensure_idle(slug)
+        except HTTPException:
+            coro.close()
+            raise
+        task = asyncio.create_task(coro)
+        jobs.add(job_id, eq, task, novel_slug=slug, kind="translate")
+
+
+@contextmanager
+def novel_busy(slug: str, what: str):
+    """Giữ truyện ở trạng thái bận suốt một thao tác ghi tên riêng (409 nếu đang dịch)."""
+    with _BUSY_LOCK:
+        _ensure_idle(slug)
+        _BUSY[slug] = what
+    try:
+        yield
+    finally:
+        with _BUSY_LOCK:
+            _BUSY.pop(slug, None)
 
 
 class TranslateRequest(BaseModel):
@@ -53,8 +89,7 @@ async def start_translation(req: TranslateRequest):
         run_wiki=req.run_wiki,
     )
 
-    task = asyncio.create_task(orch.run())
-    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="translate")
+    _add_job(req.novel_slug, job_id, eq, orch.run())
     return {"job_id": job_id}
 
 
@@ -185,8 +220,7 @@ async def retranslate_needs_fix(req: RetranslateRequest):
         client=get_client(),
         chapter_filenames=needs_fix,
     )
-    task = asyncio.create_task(orch.run())
-    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="translate")
+    _add_job(req.novel_slug, job_id, eq, orch.run())
     return {"job_id": job_id, "count": len(needs_fix)}
 
 
@@ -219,6 +253,5 @@ async def extract_terms(req: ExtractRequest):
         finally:
             await eq.close()
 
-    task = asyncio.create_task(run_extractor())
-    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="translate")
+    _add_job(req.novel_slug, job_id, eq, run_extractor())
     return {"job_id": job_id}

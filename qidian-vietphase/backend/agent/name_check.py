@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -66,14 +67,22 @@ def _runs(text: str) -> list[list[re.Match]]:
     return runs
 
 
+def _nfc(s: str) -> str:
+    return unicodedata.normalize("NFC", s)
+
+
 def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResult:
+    """Kiểm + tự sửa tên. Văn bản được chuẩn hoá NFC trước (dấu tổ hợp → dựng sẵn)."""
+    raw, translated = _nfc(raw), _nfc(translated)
     res = CheckResult(text=translated)
     present = present_terms(raw, profile)
-    canon = {t.vi for t in present}
+    canon = {_nfc(t.vi) for t in present}
     by_fold: dict[str, set[str]] = {}
     for vi in canon:
         by_fold.setdefault(fold(vi), set()).add(vi)
-    lengths = sorted({len(syllables(v)) for v in canon}, reverse=True)
+    # Tên 1 âm tiết không tự sửa: chữ đầu câu viết hoa + bỏ dấu dễ trùng từ thường
+    # ("Ăn" ~ "An").
+    lengths = sorted({k for k in (len(syllables(v)) for v in canon) if k >= 2}, reverse=True)
 
     # 1. Biến thể → sửa (thay từ cuối lên để vị trí không lệch).
     edits: list[tuple[int, int, str, str]] = []
@@ -110,40 +119,55 @@ def check_and_fix(raw: str, translated: str, profile: NovelProfile) -> CheckResu
     for start, end, found, expected in sorted(edits, reverse=True):
         text = text[:start] + expected + text[end:]
         counts[(found, expected)] = counts.get((found, expected), 0) + 1
-    res.text = text
     res.fixes = [{"found": f, "expected": e, "count": c} for (f, e), c in sorted(counts.items())]
 
-    # 1b. Tên ≥3 âm tiết không có dạng chuẩn nhưng có đúng MỘT cụm viết hoa khác đúng một
-    # âm (vd "Bùi Thiên Cang" ↔ "Bùi Thiên Cương"), cụm đó không phải tên nào trong bảng →
-    # coi là cùng người, sửa. Tên 2 âm tiết chỉ báo (dễ nhầm người cùng họ).
-    all_vi = {t.vi for t in profile.all_terms() if t.vi}
-    for t in present:
-        target = syllables(t.vi)
-        n = len(target)
-        if n < 3 or re.search(rf"(?<!\w){re.escape(t.vi)}(?!\w)", text, re.IGNORECASE):
-            continue
-        cands: set[str] = set()
-        for run in _runs(text):
+    # 1b. Tên ≥3 âm tiết không có dạng chuẩn nhưng có cụm viết hoa khác đúng một âm, cùng âm
+    # đầu (vd "Bùi Thiên Cang" ↔ "Bùi Thiên Cương") → cùng người, sửa — chỉ khi khớp duy
+    # nhất theo CẢ HAI chiều: tên đích có đúng một cụm ứng viên, và cụm đó không gần tên
+    # nào khác trong bảng. Tên 2 âm tiết chỉ báo (dễ nhầm người cùng họ).
+    all_names = {_nfc(t.vi) for t in profile.all_terms() if t.vi and is_name_like(t.vi)}
+
+    def near(words: list[str], target: list[str]) -> bool:
+        same = sum(fold(a) == fold(b) for a, b in zip(words, target))
+        # Âm đầu (họ / chữ đầu tên) phải trùng: "Hứa Tư Lê" không phải "Tiêu Tứ Lê".
+        return len(words) == len(target) and same == len(target) - 1 and fold(words[0]) == fold(target[0])
+
+    def has(vi: str, body: str) -> bool:
+        return bool(re.search(rf"(?<!\w){re.escape(vi)}(?!\w)", body, re.IGNORECASE))
+
+    targets = [_nfc(t.vi) for t in present
+               if len(syllables(t.vi)) >= 3 and not has(_nfc(t.vi), text)]
+    runs = _runs(text)
+    cand_of: dict[str, set[str]] = {}
+    for vi in targets:
+        tgt = syllables(vi)
+        n = len(tgt)
+        for run in runs:
             for i in range(len(run) - n + 1):
                 words = [m.group(0) for m in run[i:i + n]]
                 phrase = " ".join(words)
-                if phrase in all_vi or any(v in phrase for v in canon):
+                if phrase in all_names or any(v in phrase for v in canon):
                     continue
-                same = sum(fold(a) == fold(b) for a, b in zip(words, target))
-                # Âm tiết đầu (họ / chữ đầu tên) phải trùng: "Hứa Tư Lê" không phải "Tiêu Tứ Lê".
-                if same == n - 1 and fold(words[0]) == fold(target[0]):
-                    cands.add(phrase)
-        if len(cands) == 1:
-            found = next(iter(cands))
-            text, k = re.subn(rf"(?<!\w){re.escape(found)}(?!\w)", t.vi, text)
-            if k:
-                res.fixes.append({"found": found, "expected": t.vi, "count": k})
+                if near(words, tgt):
+                    cand_of.setdefault(vi, set()).add(phrase)
+    for vi, cands in cand_of.items():
+        if len(cands) != 1:
+            continue
+        found = next(iter(cands))
+        fw = syllables(found)
+        if sum(near(fw, syllables(other)) for other in all_names) != 1:
+            res.issues.append({"kind": "ambiguous", "found": found,
+                               "detail": f"«{found}» gần nhiều tên trong bảng, không tự sửa"})
+            continue
+        text, k = re.subn(rf"(?<!\w){re.escape(found)}(?!\w)", vi, text)
+        if k:
+            res.fixes.append({"found": found, "expected": vi, "count": k})
     res.text = text
 
     # 2. Tên có trong bản gốc mà bản dịch không có tên chuẩn.
     for t in present:
         # Không phân biệt hoa thường: vật phẩm như "ngọc giản" viết thường vẫn là đúng tên.
-        if not re.search(rf"(?<!\w){re.escape(t.vi)}(?!\w)", text, re.IGNORECASE):
+        if not has(_nfc(t.vi), text):
             res.issues.append({"kind": "missing", "zh": t.zh, "expected": t.vi,
                                "detail": f"{t.zh} → bản dịch không có «{t.vi}»"})
 
@@ -162,26 +186,18 @@ def _write_atomic(path: Path, text: str) -> None:
 
 async def check_chapter_file(state, chapter: dict, source_path: Path,
                              profile: NovelProfile) -> CheckResult | None:
-    """Kiểm + tự sửa file bản dịch của một chương, lưu kết quả vào DB.
+    """Kiểm + tự sửa cả file bản dịch (kể cả dòng tiêu đề "# …"), lưu kết quả vào DB.
 
     Không có file bản dịch hoặc file nguồn (vd chương OCR chưa có .txt) → None.
-    Dòng tiêu đề "# …" được sửa cùng các thay thế của phần thân.
     """
     out_path = Path(chapter.get("translated_path") or "")
     if not chapter.get("translated_path") or not out_path.is_file() or not source_path.is_file():
         return None
     raw = source_path.read_text(encoding="utf-8")
     text = out_path.read_text(encoding="utf-8")
-    head, body = "", text
-    if text.startswith("# ") and "\n\n" in text:
-        head, body = text.split("\n\n", 1)
-        head += "\n\n"
-    res = check_and_fix(raw, body, profile)
-    new_head = head
-    for f in res.fixes:
-        new_head = re.sub(rf"(?<!\w){re.escape(f['found'])}(?!\w)", f["expected"], new_head)
-    if res.text != body or new_head != head:
-        _write_atomic(out_path, new_head + res.text)
+    res = check_and_fix(raw, text, profile)
+    if res.text != text:
+        _write_atomic(out_path, res.text)
     await state.save_name_check(chapter["filename"], chapter.get("novel_slug") or "",
                                 res.fixes, res.issues)
     return res

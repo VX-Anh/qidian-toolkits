@@ -12,6 +12,7 @@ import json
 import re
 import shutil
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 
@@ -19,12 +20,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..agent.name_check import check_chapter_file
+from ..agent.hanviet import READINGS_SECTION, is_han, norm_syllable, syllables
 from ..agent.novel_loader import NOVEL_MD_LOCK, load_novel, write_novel_md
 from ..agent.state import ChapterStatus
 from ..config import settings
 from ..safety import check_request_params, check_slug
 from ..shared import get_state
-from .translate import _ensure_idle
+from .translate import novel_busy
 
 router = APIRouter(prefix="/api/names", tags=["names"], dependencies=[Depends(check_request_params)])
 
@@ -66,10 +68,11 @@ def _done_chapters(slug: str) -> list[dict]:
 
 
 def _check_names(old: str, new: str) -> tuple[str, str]:
-    old, new = old.strip(), new.strip()
+    old = unicodedata.normalize("NFC", old.strip())
+    new = unicodedata.normalize("NFC", new.strip())
     for v in (old, new):
-        if not v or len(v) > 100 or any(ch in v for ch in "|\n\r"):
-            raise HTTPException(400, "Tên không hợp lệ (rỗng, quá dài hoặc có ký tự | / xuống dòng)")
+        if not v or len(v) > 100 or any(ch in v for ch in "|\\\n\r"):
+            raise HTTPException(400, "Tên không hợp lệ (rỗng, quá dài hoặc có ký tự | \\ / xuống dòng)")
     if old == new:
         raise HTTPException(400, "Tên mới trùng tên cũ")
     return old, new
@@ -77,6 +80,50 @@ def _check_names(old: str, new: str) -> tuple[str, str]:
 
 def _pattern(old: str) -> re.Pattern:
     return re.compile(rf"(?<!\w){re.escape(old)}(?!\w)")
+
+
+def _longer_names(slug: str, old: str) -> list[str]:
+    """Tên chuẩn khác trong bảng có chứa tên cũ (vd "Lâm An Thành" khi đổi "Lâm An")."""
+    pat = _pattern(old)
+    return sorted({t.vi for t in _profile(slug).all_terms()
+                   if t.vi and t.vi != old and pat.search(t.vi)}, key=len, reverse=True)
+
+
+def _replace(text: str, old: str, new: str, protected: list[str]) -> tuple[str, int]:
+    """Thay tên cũ trừ các lần nằm trong một tên chuẩn dài hơn (giữ tên đó khớp bảng)."""
+    text = unicodedata.normalize("NFC", text)
+    spans = [(m.start(), m.end()) for vi in protected for m in _pattern(vi).finditer(text)]
+    n = 0
+
+    def sub(m: re.Match) -> str:
+        nonlocal n
+        if any(a <= m.start() and m.end() <= b for a, b in spans):
+            return m.group(0)
+        n += 1
+        return new
+
+    return _pattern(old).sub(sub, text), n
+
+
+def _update_readings(md: str, zhs: list[str], new: str) -> str:
+    """Tên phiên âm từng chữ đổi âm → cập nhật các chữ đã chốt trong mục Âm Hán-Việt
+    (không thì bước dò tên vẫn ép âm cũ cho tên sau)."""
+    sy = syllables(new)
+    want: dict[str, str] = {}
+    for zh in zhs:
+        if len(zh) == len(sy) and all(is_han(c) for c in zh):
+            for c, s in zip(zh, sy):
+                want[c] = norm_syllable(s)
+    if not want or f"## {READINGS_SECTION}" not in md:
+        return md
+    start = md.index(f"## {READINGS_SECTION}")
+    nxt = re.search(r"\n## ", md[start + 3:])
+    end = start + 3 + nxt.start() if nxt else len(md)
+    block = md[start:end]
+    for c, r in want.items():
+        block = re.sub(rf"^(\|\s*{re.escape(c)}\s*\|\s*)[^|\n]*?(\s*\|)", rf"\g<1>{r}\g<2>",
+                       block, flags=re.M)
+    return md[:start] + block + md[end:]
 
 
 def _backup_root(slug: str) -> Path:
@@ -100,16 +147,16 @@ def report(slug: str):
 @router.post("/{slug}/check")
 async def check_all(slug: str):
     check_slug(slug)
-    _ensure_idle(slug)
     profile = _profile(slug)
     fixed = issues = checked = 0
-    for c in _done_chapters(slug):
-        res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
-        if res is None:
-            continue
-        checked += 1
-        fixed += res.fixed_count
-        issues += len(res.issues)
+    with novel_busy(slug, "kiểm tên riêng"):
+        for c in _done_chapters(slug):
+            res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
+            if res is None:
+                continue
+            checked += 1
+            fixed += res.fixed_count
+            issues += len(res.issues)
     return {"checked": checked, "fixed": fixed, "issues": issues}
 
 
@@ -117,86 +164,91 @@ async def check_all(slug: str):
 def rename_preview(slug: str, req: RenameRequest):
     check_slug(slug)
     old, new = _check_names(req.old_vi, req.new_vi)
-    pat = _pattern(old)
+    protected = _longer_names(slug, old)
     chapters, total = [], 0
     for c in _done_chapters(slug):
-        text = c["_path"].read_text(encoding="utf-8")
-        hits = list(pat.finditer(text))
-        if not hits:
+        text = unicodedata.normalize("NFC", c["_path"].read_text(encoding="utf-8"))
+        _, k = _replace(text, old, new, protected)
+        if not k:
             continue
-        m = hits[0]
-        sample = text[max(0, m.start() - _SNIPPET):m.end() + _SNIPPET].replace("\n", " ")
+        m = _pattern(old).search(text)
+        sample = text[max(0, m.start() - _SNIPPET):m.end() + _SNIPPET].replace("\n", " ") if m else ""
         chapters.append({"filename": c["filename"], "chapter_num": c["chapter_num"],
-                         "count": len(hits), "sample": sample})
-        total += len(hits)
+                         "count": k, "sample": sample})
+        total += k
     rows = sum(1 for t in _profile(slug).all_terms() if t.vi == old)
-    return {"old_vi": old, "new_vi": new, "total": total, "chapters": chapters, "glossary_rows": rows}
+    return {"old_vi": old, "new_vi": new, "total": total, "chapters": chapters,
+            "glossary_rows": rows, "protected": protected}
 
 
 @router.post("/{slug}/rename/apply")
 def rename_apply(slug: str, req: RenameRequest):
+    """Đổi tên trong bản dịch + bảng thuật ngữ + âm đã chốt, một giao dịch có sao lưu."""
     check_slug(slug)
-    _ensure_idle(slug)   # job dịch đang ghi bản dịch / novel.md → không thay chen ngang
     old, new = _check_names(req.old_vi, req.new_vi)
-    pat = _pattern(old)
-    backup_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
-    bdir = _backup_root(slug) / backup_id
-    manifest: dict = {"old_vi": old, "new_vi": new, "files": [], "novel_md": False}
-    replaced = 0
-    changed: list[tuple[Path, str]] = []
-    for c in _done_chapters(slug):
-        text = c["_path"].read_text(encoding="utf-8")
-        new_text, k = pat.subn(new, text)
-        if k:
-            changed.append((c["_path"], new_text))
-            replaced += k
-    md = settings.rules_dir / slug / "novel.md"
-    with NOVEL_MD_LOCK:
-        md_text = md.read_text(encoding="utf-8") if md.is_file() else ""
-        row = re.compile(rf"^(\|[^|\n]*\|\s*){re.escape(old)}(\s*\|)", re.M)
-        new_md, rows = row.subn(rf"\g<1>{new}\g<2>", md_text)
-        if not changed and not rows:
-            return {"backup_id": None, "files": 0, "replaced": 0, "glossary_rows": 0}
-        bdir.mkdir(parents=True, exist_ok=True)
-        for i, (path, _) in enumerate(changed):
-            name = f"{i:04d}.txt"
-            shutil.copy2(path, bdir / name)
-            manifest["files"].append({"path": str(path), "backup": name})
-        if rows:
-            shutil.copy2(md, bdir / "novel.md")
-            manifest["novel_md"] = True
-        (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-        for path, text in changed:
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_bytes(text.encode("utf-8"))
-            tmp.replace(path)
-        if rows:
-            write_novel_md(md, new_md)
-    return {"backup_id": backup_id, "files": len(changed), "replaced": replaced, "glossary_rows": rows}
+    with novel_busy(slug, "đổi tên riêng"):
+        protected = _longer_names(slug, old)
+        backup_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        bdir = _backup_root(slug) / backup_id
+        manifest: dict = {"old_vi": old, "new_vi": new, "files": [], "novel_md": False}
+        replaced = 0
+        changed: list[tuple[Path, str]] = []
+        for c in _done_chapters(slug):
+            new_text, k = _replace(c["_path"].read_text(encoding="utf-8"), old, new, protected)
+            if k:
+                changed.append((c["_path"], new_text))
+                replaced += k
+        md = settings.rules_dir / slug / "novel.md"
+        with NOVEL_MD_LOCK:
+            md_text = md.read_text(encoding="utf-8") if md.is_file() else ""
+            row = re.compile(rf"^\|\s*([^|\n]*?)\s*\|\s*{re.escape(old)}\s*\|", re.M)
+            zhs = [m.group(1) for m in row.finditer(md_text)]
+            new_md, rows = re.compile(
+                rf"^(\|[^|\n]*\|\s*){re.escape(old)}(\s*\|)", re.M).subn(rf"\g<1>{new}\g<2>", md_text)
+            new_md = _update_readings(new_md, zhs, new)
+            if not changed and new_md == md_text:
+                return {"backup_id": None, "files": 0, "replaced": 0, "glossary_rows": 0}
+            bdir.mkdir(parents=True, exist_ok=True)
+            for i, (path, _) in enumerate(changed):
+                name = f"{i:04d}.txt"
+                shutil.copy2(path, bdir / name)
+                manifest["files"].append({"path": str(path), "backup": name})
+            if md.is_file():
+                shutil.copy2(md, bdir / "novel.md")   # luôn sao lưu: hoàn tác trả cả bảng thuật ngữ
+                manifest["novel_md"] = True
+            (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            for path, text in changed:
+                tmp = path.with_name(path.name + ".tmp")
+                tmp.write_bytes(text.encode("utf-8"))
+                tmp.replace(path)
+            if new_md != md_text:
+                write_novel_md(md, new_md)
+    return {"backup_id": backup_id, "files": len(changed), "replaced": replaced,
+            "glossary_rows": rows, "protected": protected}
 
 
 @router.post("/{slug}/rename/undo")
 def rename_undo(slug: str, req: UndoRequest):
     check_slug(slug)
-    _ensure_idle(slug)
     if not _BACKUP_ID.match(req.backup_id):
         raise HTTPException(400, "backup_id không hợp lệ")
-    bdir = _backup_root(slug) / req.backup_id
-    mf = bdir / "manifest.json"
-    if not mf.is_file():
-        raise HTTPException(404, "Không tìm thấy bản sao lưu")
-    manifest = json.loads(mf.read_text(encoding="utf-8"))
-    out_root = (settings.output_dir / slug).resolve()
-    restored = 0
-    for f in manifest.get("files", []):
-        dst = Path(f["path"]).resolve()
-        src = bdir / Path(f["backup"]).name
-        if dst.is_relative_to(out_root) and src.is_file():
-            shutil.copy2(src, dst)
-            restored += 1
-    if manifest.get("novel_md") and (bdir / "novel.md").is_file():
-        with NOVEL_MD_LOCK:
-            write_novel_md(settings.rules_dir / slug / "novel.md",
-                           (bdir / "novel.md").read_text(encoding="utf-8"))
-    shutil.rmtree(bdir, ignore_errors=True)
+    with novel_busy(slug, "hoàn tác đổi tên"):
+        bdir = _backup_root(slug) / req.backup_id
+        mf = bdir / "manifest.json"
+        if not mf.is_file():
+            raise HTTPException(404, "Không tìm thấy bản sao lưu")
+        manifest = json.loads(mf.read_text(encoding="utf-8"))
+        out_root = (settings.output_dir / slug).resolve()
+        restored = 0
+        for f in manifest.get("files", []):
+            dst = Path(f["path"]).resolve()
+            src = bdir / Path(f["backup"]).name
+            if dst.is_relative_to(out_root) and src.is_file():
+                shutil.copy2(src, dst)
+                restored += 1
+        if manifest.get("novel_md") and (bdir / "novel.md").is_file():
+            with NOVEL_MD_LOCK:
+                write_novel_md(settings.rules_dir / slug / "novel.md",
+                               (bdir / "novel.md").read_text(encoding="utf-8"))
+        shutil.rmtree(bdir, ignore_errors=True)
     return {"restored": restored, "novel_md": bool(manifest.get("novel_md"))}

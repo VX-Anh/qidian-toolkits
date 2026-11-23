@@ -765,20 +765,26 @@ function App() {
       return;
     }
     try {
+      // Đổi tên Việt: hỏi áp dụng cho các chương đã dịch TRƯỚC. Máy chủ đổi tên trong bản
+      // dịch + bảng thuật ngữ + âm đã chốt trong một lần có sao lưu (hoàn tác trả đủ cả ba).
+      let base = oldItem;
+      if (oldItem.vi && oldItem.vi.trim() !== newItem.vi.trim()) {
+        const applied = await offerRenameInChapters(oldItem.vi.trim(), newItem.vi.trim());
+        if (applied) base = { ...oldItem, vi: newItem.vi.trim() };
+      }
       const rawData = await api.get(`/api/novels/${currentSlug}/raw`);
-      const oldRow = glossRow(oldItem).trim();
+      const oldRow = glossRow(base).trim();
       const newRow = glossRow(newItem);
-      const lines = rawData.content.split("\n");
-      const idx = lines.findIndex(l => l.trim() === oldRow);
-      if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
-      lines[idx] = newRow;
-      await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content: lines.join("\n"), version: rawData.version });
+      if (oldRow !== newRow.trim()) {
+        const lines = rawData.content.split("\n");
+        const idx = lines.findIndex(l => l.trim() === oldRow);
+        if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
+        lines[idx] = newRow;
+        await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content: lines.join("\n"), version: rawData.version });
+      }
       await loadGlossary(currentSlug);
       await loadNovelMd(currentSlug);
       setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
-      if (oldItem.vi && oldItem.vi.trim() !== newItem.vi.trim()) {
-        await offerRenameInChapters(oldItem.vi.trim(), newItem.vi.trim());
-      }
     } catch (err) {
       setToast({ msg: `Lỗi sửa thuật ngữ: ${err.message}`, type: "error" });
     }
@@ -790,17 +796,20 @@ function App() {
     const base = `/api/names/${encodeURIComponent(slug)}/rename`;
     try {
       const pv = await api.post(`${base}/preview`, { old_vi: oldVi, new_vi: newVi });
-      if (!pv.total) return;
+      if (!pv.total) return false;
       const list = pv.chapters.slice(0, 8).map(c => `• Chương ${c.chapter_num}: ${c.count} chỗ`).join("\n");
       const more = pv.chapters.length > 8 ? `\n… và ${pv.chapters.length - 8} chương khác` : "";
+      const keep = pv.protected?.length ? `\n\nGiữ nguyên trong tên dài hơn: ${pv.protected.join(", ")}` : "";
       if (!window.confirm(
-        `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}\n\nBản dịch cũ được sao lưu trên máy chủ.`
-      )) return;
+        `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}${keep}\n\nBản dịch cũ được sao lưu trên máy chủ.`
+      )) return false;
       const r = await api.post(`${base}/apply`, { old_vi: oldVi, new_vi: newVi });
       await loadChapters(slug);
       setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
+      return !!r.glossary_rows;
     } catch (err) {
       setToast({ msg: `Lỗi đổi tên trong các chương: ${err.message}`, type: "error" });
+      return false;
     }
   }
 
