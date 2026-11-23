@@ -102,7 +102,7 @@ function WikiScreen({ entities, novelSlug }) {
   useEffectW(() => {
     if (!selZh || !novelSlug) { setDetail(null); return; }
     let alive = true;
-    fetch(`/api/wiki/${novelSlug}/entity/${encodeURIComponent(selZh)}`)
+    fetch(`/api/wiki/${encodeURIComponent(novelSlug)}/entity/${encodeURIComponent(selZh)}`)
       .then(r => (r.ok ? r.json() : null))
       .then(d => { if (alive) setDetail(d); })
       .catch(() => {});

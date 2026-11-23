@@ -404,7 +404,7 @@ function OcrUploadButton({ onUploadImages }) {
               onMouseEnter={e => e.currentTarget.style.background = "var(--bg-elevated)"}
               onMouseLeave={e => e.currentTarget.style.background = "none"}>
               <Icon name="sparkles" size={13} color="var(--fg-3)" />
-              <span style={{ flex: 1 }}>OCR bằng AI <span style={{ color: "var(--fg-5)" }}>· OpenAI vision</span></span>
+              <span style={{ flex: 1 }}>OCR bằng AI <span style={{ color: "var(--fg-5)" }}>· Gemini vision</span></span>
             </button>
           </div>
         </>

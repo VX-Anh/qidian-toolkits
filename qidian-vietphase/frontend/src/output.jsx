@@ -8,25 +8,42 @@ function OutputScreen({ chapters, novel, onOpen, mode }) {
   const [content, setContent] = useStateO("");
   const [loading, setLoading] = useStateO(false);
 
-  // Sync selected when done list changes (first load)
+  // Đổi truyện → bỏ chương đang chọn của truyện cũ
+  useEffectO(() => { setSelected(null); }, [novel?.slug]);
+
+  // Chọn chương mới nhất khi chưa chọn / chương đang chọn không còn trong danh sách
   useEffectO(() => {
-    if (!selected && done.length > 0) {
+    if ((!selected || !done.some(c => c.filename === selected)) && done.length > 0) {
       setSelected(done[done.length - 1].filename);
     }
-  }, [done.length]);
+  }, [done.length, selected, novel?.slug]);
 
   // Fetch content when selected changes
   useEffectO(() => {
     if (!selected) { setContent(""); return; }
+    let alive = true;   // chọn chương khác nhanh → bỏ response cũ
     setLoading(true);
     setContent("");
     fetch(`/api/chapters/${encodeURIComponent(selected)}/output`)
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) {
+          let detail = r.statusText;
+          try { detail = (await r.json()).detail || detail; } catch { /* ignore */ }
+          throw new Error(detail);
+        }
+        return r.json();
+      })
       .then(d => {
+        if (!alive) return;
         setContent((d.content || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
         setLoading(false);
       })
-      .catch(() => { setContent(""); setLoading(false); });
+      .catch(err => {
+        if (!alive) return;
+        setContent(`⚠ Không tải được bản dịch: ${err.message}`);
+        setLoading(false);
+      });
+    return () => { alive = false; };
   }, [selected]);
 
   const copyToClipboard = () => {

@@ -19,10 +19,20 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 // ── API helpers ───────────────────────────────────────────────────────────────
+// Lỗi HTTP kèm `detail` từ FastAPI; message vẫn bắt đầu bằng mã status (code cũ
+// kiểm tra kiểu startsWith("409")).
+async function apiError(r) {
+  let detail = r.statusText;
+  try { const j = await r.json(); if (j && j.detail) detail = j.detail; } catch { /* không phải JSON */ }
+  const e = new Error(`${r.status} ${detail}`);
+  e.status = r.status;
+  return e;
+}
+
 const api = {
   async get(url) {
     const r = await fetch(url);
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) throw await apiError(r);
     return r.json();
   },
   async post(url, body) {
@@ -31,7 +41,7 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) throw await apiError(r);
     return r.json();
   },
   async put(url, body) {
@@ -40,12 +50,12 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) throw await apiError(r);
     return r.json();
   },
   async del(url) {
     const r = await fetch(url, { method: "DELETE" });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) throw await apiError(r);
     return r.json();
   },
 };
@@ -419,11 +429,31 @@ function App() {
     };
 
     es.onerror = () => {
+      // readyState CONNECTING = trình duyệt đang tự kết nối lại (mạng chập chờn):
+      // job vẫn chạy, server phát lại lịch sử khi nối lại → giữ nguyên trạng thái.
+      // CLOSED = job không còn (404 / server tắt) → kết thúc ở phía UI.
+      if (es.readyState !== EventSource.CLOSED) return;
       if (esRef.current === es) {
         setIsRunning(false);
         esRef.current = null;
+        if (currentSlugRef.current === jobSlug) loadChapters(jobSlug);
       }
     };
+  }
+
+  // ── Trích thuật ngữ (ExtractorAgent) ─────────────────────────────────
+  function runExtract() {
+    if (!currentSlug) { setToast({ msg: "Chọn truyện trước!", type: "error" }); return; }
+    if (isRunning) { setToast({ msg: "Đang có tác vụ chạy, đợi xong đã.", type: "error" }); return; }
+    const jobSlug = currentSlug;
+    api.post("/api/translate/extract", { novel_slug: jobSlug })
+      .then(({ job_id }) => {
+        activeJobIdRef.current = job_id;
+        setIsRunning(true);
+        listenToJob(job_id, jobSlug);   // kết thúc bằng event done → nạp lại glossary/novel.md
+        setToast({ msg: "Đang trích xuất thuật ngữ…", type: "info" });
+      })
+      .catch(err => setToast({ msg: `Không thể trích thuật ngữ: ${err.message}`, type: "error" }));
   }
 
   // ── Đưa chương vào Story-Wiki (bước riêng, tách khỏi dịch) ────────────
@@ -461,6 +491,7 @@ function App() {
       } catch { /* ignore malformed */ }
     };
     es.onerror = () => {
+      if (es.readyState !== EventSource.CLOSED) return;   // đang tự kết nối lại
       if (esRef.current === es) { setIsRunning(false); esRef.current = null; }
     };
   }
@@ -470,17 +501,23 @@ function App() {
     if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi upload!", type: "error" }); return; }
     const txtFiles = [...files].filter(f => f.name.endsWith(".txt"));
     if (!txtFiles.length) { setToast({ msg: "Chỉ chấp nhận file .txt", type: "error" }); return; }
+    const slug = currentSlug;   // giữ cố định: người dùng có thể đổi truyện trong lúc chờ
     const fd = new FormData();
-    fd.append("novel_slug", currentSlug);
+    fd.append("novel_slug", slug);
     txtFiles.forEach(f => fd.append("files", f));
     try {
       const r = await fetch("/api/chapters/upload", { method: "POST", body: fd });
-      const { saved, errors } = await r.json();
-      if (saved.length) {
+      if (!r.ok) throw await apiError(r);
+      const { saved = [], errors = [] } = await r.json();
+      if (saved.length && currentSlugRef.current === slug) loadChapters(slug);
+      if (errors.length) {
+        setToast({
+          msg: `${saved.length ? `Đã upload ${saved.length} file. ` : ""}Lỗi ${errors.length} file: ${errors.join(" · ")}`,
+          type: "error",
+        });
+      } else if (saved.length) {
         setToast({ msg: `Đã upload ${saved.length} file`, type: "success" });
-        loadChapters(currentSlug);
       }
-      (errors || []).forEach(e => setToast({ msg: e, type: "error" }));
     } catch (err) {
       setToast({ msg: `Upload thất bại: ${err.message}`, type: "error" });
     }
@@ -489,7 +526,7 @@ function App() {
   // ── OCR image upload → server OCR → new chapter ───────────────────────
   const ocrEsRef = useRefA(null);
 
-  function streamOcrJob(jobId, title) {
+  function streamOcrJob(jobId, title, jobSlug) {
     if (ocrEsRef.current) ocrEsRef.current.close();
     const es = new EventSource(`/api/ocr/stream/${jobId}`);
     ocrEsRef.current = es;
@@ -514,7 +551,7 @@ function App() {
           setOcrBanner({ active: true, jobId, title: (title || "OCR") + " ✓", preview: ev.preview || "", charCount: ev.char_count || charCount });
           setToast({ msg: `OCR xong: ${ev.filename}`, type: "success" });
           setTimeout(() => setOcrBanner(null), 2500);
-          if (currentSlug) loadChapters(currentSlug);
+          if (jobSlug && currentSlugRef.current === jobSlug) loadChapters(jobSlug);
         } else if (ev.type === "ocr_error") {
           es.close(); ocrEsRef.current = null;
           setToast({ msg: `OCR lỗi: ${ev.msg}`, type: "error" });
@@ -522,7 +559,10 @@ function App() {
         }
       } catch { /* ignore */ }
     };
-    es.onerror = () => { es.close(); if (ocrEsRef.current === es) ocrEsRef.current = null; };
+    es.onerror = () => {
+      if (es.readyState !== EventSource.CLOSED) return;   // đang tự kết nối lại
+      if (ocrEsRef.current === es) { ocrEsRef.current = null; setOcrBanner(null); }
+    };
   }
 
   async function handleImportFolder() {
@@ -551,7 +591,7 @@ function App() {
       if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
       const { job_id } = await r.json();
       setToast({ msg: `Đang OCR ${imgs.length} ảnh (${engineLabel})…`, type: "info" });
-      streamOcrJob(job_id, `OCR ${imgs.length} ảnh · ${engineLabel}`);
+      streamOcrJob(job_id, `OCR ${imgs.length} ảnh · ${engineLabel}`, fd.get("novel_slug"));
     } catch (err) {
       setToast({ msg: `Upload ảnh thất bại: ${err.message}`, type: "error" });
     }
@@ -560,10 +600,12 @@ function App() {
   // On novel switch / mount, pick up any in-flight OCR job
   useEffectA(() => {
     if (!currentSlug) return;
-    api.get(`/api/ocr/jobs?novel_slug=${currentSlug}`)
+    const slug = currentSlug;
+    api.get(`/api/ocr/jobs?novel_slug=${encodeURIComponent(slug)}`)
       .then(jobs => {
+        if (currentSlugRef.current !== slug) return;
         if (jobs.length > 0 && !ocrEsRef.current) {
-          streamOcrJob(jobs[0].job_id, jobs[0].chapter_title || "OCR đang xử lý");
+          streamOcrJob(jobs[0].job_id, jobs[0].chapter_title || "OCR đang xử lý", slug);
         }
       })
       .catch(() => {});
@@ -786,7 +828,7 @@ function App() {
 
   const onCmdkAction = (item) => {
     if (item.id === "translate-all")   startTranslation(null);
-    if (item.id === "extract-terms")   setToast({ msg: "Đang trích xuất thuật ngữ…", type: "info" });
+    if (item.id === "extract-terms")   runExtract();
     if (item.id === "new-novel")       setNewOpen(true);
     if (item.id === "toggle-activity") setTweak("showActivity", !tweaks.showActivity);
     if (item.id === "go-chapters")     setTab("chapters");
@@ -883,7 +925,8 @@ function App() {
               onAdd={onAddGloss}
               onEdit={onEditGloss}
               onDelete={onDeleteGloss}
-              onExtract={() => setToast({ msg: "Đang trích xuất thuật ngữ từ AI…", type: "info" })}
+              onExtract={runExtract}
+              isExtracting={isRunning}
             />
           )}
 
