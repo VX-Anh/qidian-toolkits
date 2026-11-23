@@ -90,7 +90,7 @@ Cột **Đầu việc:** W2 tokens/style · W3 đọc · W4 login · W5 khung ·
 | H4 | **Nặng** | Phụ thuộc `--fg-4`/`--fg-5` và một số `--gray-*` / màu cứng — tương phản & theme sáng | Token vai trò + class component | W2, W6 |
 | H1 | Trung bình | Trạng thái rỗng/lỗi chưa thống nhất (`StatusBlock`) | Dùng `StatusBlock` | W6 |
 | H8 | Trung bình | Toolbar nhiều nút (Upload, OCR, Quét, Dịch…) dễ rối trên mobile | Giữ hành vi; xếp lại khoảng cách/chip theo token; không đổi API | W6 |
-| H4 | Nhẹ | Nút «Tải xuống» / «more» khi chọn hàng gần như trang trí | Ticket sau hoặc ẩn nếu chưa có hành vi | Sau |
+| H4 | Nhẹ | Nút «Tải xuống» / «more» khi chọn hàng gần như trang trí | Đã bỏ hai nút không có hành vi (W6) | W6 |
 
 ### 3.3 Đối chiếu (`translation_view.jsx`)
 
@@ -243,6 +243,11 @@ Thang **bo góc** (`--radius-sm` … `--radius-pill`), **khoảng cách** (`--sp
 | `.status-block` | Khối loading / error / empty |
 | `.skeleton` | Placeholder tải |
 | `.sr-only` | Chỉ đọc bởi trình đọc màn hình |
+| `.seg.inline` | Segmented control nằm trên thanh công cụ (`SegControl` của đối chiếu, Cài đặt) — W6 |
+| `.chip-btn` | Chip lọc bấm được, trạng thái bằng `aria-pressed` (lọc trạng thái chương) — W6 |
+| `.link-btn` | Nút trông như liên kết (mở chương, tên thực thể trong Wiki) — W6 |
+| `.menu-pop` / `.menu-item` | Menu thả xuống (chọn engine OCR) — W6 |
+| `.wiki-ent-item` / `.wiki-rel` / `.wiki-label` | Danh sách thực thể (nút, `aria-current`), dòng quan hệ, nhãn mục của Story-Wiki — W6 |
 
 Toàn cục:
 
@@ -300,27 +305,62 @@ suspendKeys, fontMode, onFontMode(v)
 | Vuốt ngang đổi chương trên mobile | Phức tạp gesture; đã có nút + phím |
 | Đồng bộ prefs đọc theo tài khoản server | Chưa có API user prefs |
 | i18n ngoài tiếng Việt | Repo quy định UI tiếng Việt |
-| Favicon / `theme-color` tinh chỉnh theo OS thật | Kiểm trên thiết bị thật (người duyệt) |
+| Favicon / `theme-color` tinh chỉnh theo OS thật | Kiểm trên thiết bị thật (người duyệt). W6 chỉ gắn favicon SVG nội tuyến từ `app.jsx` để bản prod hết 404; nên thêm `<link rel="icon">` thật vào `index.html` (bản dev vẫn 404 vì Babel chạy sau khi trang nạp) |
+| Lỗi mức **trung bình / nhẹ** chưa sửa (bảng §8.3) | Không chặn luồng đọc hay luồng sửa bản dịch (Q12) |
 
 ---
 
 ## 8. Lỗi nặng đã sửa
 
-> Mục để **W6** điền sau khi kiểm tổng. Mỗi dòng: mô tả ngắn · đầu việc đã sửa · ghi chú (hoặc lý do chưa sửa).
+> W6 điền sau khi kiểm tổng (headless Chromium trên dữ liệu `seed_ux_demo.py`, cả bản dev và bản prod, 1280/384/360px, sáng và tối — xem §9). Cột **Kiểm** ghi mã TC trong kế hoạch.
 
-| Lỗi nặng | Trạng thái | Đầu việc | Ghi chú |
+### 8.1 Lỗi nặng ghi ở §3
+
+| Lỗi nặng | Trạng thái | Đầu việc | Kiểm / ghi chú |
 |---|---|---|---|
-| Tương phản `--fg-4` / `--fg-5` (theme tối) | *chưa* | W2 | |
-| Mobile không có mục lục (`.reader-sidebar` ẩn) | *chưa* | W3 / W5 | |
-| Lỗi tải chèn vào nội dung (copy/.txt) | *chưa* | W3 | |
-| Nút «Lọc» vô tác dụng | *chưa* | W3 | |
-| «Đã lưu ✓» sai nghĩa trên màn chỉ đọc | *chưa* | W3 | |
-| Rail / «Tìm & lệnh» không dùng được bàn phím | *chưa* | W5 | |
-| Không có `prefers-reduced-motion` | *chưa* | W2 / W3 | |
-| Focus bị ẩn (`outline: none` thiếu thay thế) | *chưa* | W2 | |
-| `/login` lệch phong cách app | *chưa* | W4 | |
-| Hash `#/.../output/<n>` mở overlay thay vì đọc | *chưa* | W5 | |
-| Wiki / rail: phần tử bấm là `div`/`span` | *chưa* | W5 / W6 | |
+| Tương phản `--fg-4` / `--fg-5` (theme tối) | **Đã sửa** | W2 | TC9: `node frontend/tools/check-contrast.mjs` thoát 0 (mọi cặp ≥4.5:1, gồm 3 nền đọc). W6 thay nốt chữ phụ `--fg-5` trong các màn làm việc bằng `--fg-4` |
+| Mobile không có mục lục (`.reader-sidebar` ẩn) | **Đã sửa** | W3, W5 | TC6/TC20: drawer mục lục, đóng sau khi chọn, focus vào nút đóng; thanh dưới Trước \| Mục lục \| Sau, nút ≥44×44px; `.topbar`/`.tabs` ẩn khi đọc ở ≤768px |
+| Lỗi tải chèn vào nội dung (copy/.txt) | **Đã sửa** | W3 | TC22/TC23: lỗi và mất mạng hiện `StatusBlock` có «Thử lại», Sao chép/.txt bị khoá, clipboard không nhận dòng lỗi; có mạng lại thì tự tải |
+| Nút «Lọc» vô tác dụng | **Đã sửa** | W3 | Đã bỏ nút |
+| «Đã lưu ✓» sai nghĩa trên màn chỉ đọc | **Đã sửa** | W3 | Đã bỏ nhãn |
+| Rail / «Tìm & lệnh» không dùng được bàn phím | **Đã sửa** | W5 | TC27: mục truyện là `<button>`, tab có `aria-current` |
+| Không có `prefers-reduced-motion` | **Đã sửa** | W2, W3 | TC28: `transition/animation-duration` = 0s trên drawer mục lục, thanh đọc, rail khi giả lập reduce |
+| Focus bị ẩn (`outline: none` thiếu thay thế) | **Đã sửa** | W2, W6 | TC27: Tab qua 14 điểm đầu của màn chương, sáng và tối, điểm nào cũng có viền focus. W6 bỏ `outline: "none"` inline còn sót ở ô Markdown của Cài đặt |
+| `/login` lệch phong cách app | **Đã sửa** | W4 | TC29: nạp `tokens.css`, theo `vp:theme`, có `<label>`, sai token trả 401 kèm «Token không đúng…» trong `role="alert"`, đúng token về `/`; không cuộn ngang ở 360px |
+| Hash `#/.../output/<n>` mở overlay thay vì đọc | **Đã sửa** | W5 | TC16/TC18: `/output/3` mở màn đọc, `/output/3/doi-chieu` mở overlay (Back đóng), `/chapters/3` vẫn mở overlay |
+| Wiki / rail: phần tử bấm là `div`/`span` | **Đã sửa** | W5, W6 | Rail (W5). Wiki (W6): mục thực thể, tên liên kết trong mô tả và trong quan hệ đều là `<button>`; cmdk: mục lệnh là `<button>`; dải ảnh OCR trong đối chiếu là `<button>` |
+| Màn chương: `--gray-*`/màu cứng, phụ thuộc fg yếu (§3.2) | **Đã sửa** | W2, W6 | Chip lọc trạng thái → `.chip-btn` + `aria-pressed`; «Cần sửa»/«OK»/lỗi dùng `--warn`/`--success`/`--danger`; menu OCR → `.menu-pop`/`.menu-item`. Không còn hex/rgba hay `--gray/indigo/red/amber/emerald-*` trong inline style của 6 màn |
+| Thuật ngữ: fg yếu, thiếu theme sáng (§3.4) | **Đã sửa** | W2, W6 | Token + `.card`; trạng thái rỗng dùng `StatusBlock` có nút «Thêm thuật ngữ»/«Xoá tìm kiếm» |
+| Cài đặt: fg yếu, chưa chọn được theme (§3.6) | **Đã sửa** | W2, W5, W6 | Chọn theme ở TopBar (W5). W6: nhãn gắn `htmlFor`, lưới tự xuống cột trên màn hẹp |
+
+### 8.2 Lỗi nặng W6 phát hiện khi kiểm tổng (đã sửa trong W6)
+
+| Màn | Heuristic | Lỗi | Cách sửa |
+|---|---|---|---|
+| Đọc | H9 | Mở link sâu `#/<slug>/output/<n>` (hoặc tab Đọc) làm **trắng màn**: render đầu tiên sau khi danh sách chương `ready` chạy trước effect chọn chương nên `cur` còn `null`, nhánh cuối đọc `cur.chapter_num` → React gỡ cả cây (lỗi console `Cannot read properties of null`) | Thêm nhánh «Đang mở chương…» khi chưa có `cur` (`output.jsx`) |
+| Đối chiếu | H5, H9 | Tải bản dịch/bản gốc lỗi (mất mạng, file mất) thì vẫn hiện «Chương chưa được dịch»/«Không có nội dung gốc» và **cho bấm Sửa trên bản rỗng** → Lưu sẽ ghi đè file thật bằng nội dung trống | Trạng thái tải riêng cho từng pane: `StatusBlock` loading/error có «Thử lại»; «Sửa» bị khoá tới khi tải xong; «Sao chép» khoá khi không có nội dung. Chương ảnh chưa OCR (404) vẫn coi là rỗng như cũ |
+| Thuật ngữ | H3, H8 | Ở ≤768px khối «Trích xuất từ AI» nằm trong hàng tab ngang, rộng 34px, chữ xuống dòng từng chữ → hàng tab cao ~630px, **bảng thuật ngữ cao 0** (không dùng được trên điện thoại) | Trên màn hẹp thu khối thành một nút gọn, ẩn mô tả |
+| Cài đặt | H8 | Ở ≤768px các thẻ bị flex co lại, **cắt mất ô nhập** (chỉ thấy «Tên Trung», không thấy Thể loại/Prompt) | `.settings-card { flex-shrink: 0 }` |
+| Cài đặt | H5 | Lúc `novel.md` chưa tải xong hoặc tải lỗi vẫn hiện form trên chuỗi rỗng và nút Lưu bấm được | `mdStatus` từ `app.jsx`: `StatusBlock` loading/error (+ «Thử lại»), khoá nút Lưu. Logic `version`/409 giữ nguyên (TC31) |
+| Story-Wiki | H9 | Lỗi tải danh sách thực thể hiển thị như «Chưa có dữ liệu Story-Wiki»; lỗi nạp lại nền còn xoá sạch danh sách đang có | `wikiStatus` (loading/ready/error) trong `app.jsx`; lỗi giữ danh sách cũ, chỉ hiện `StatusBlock` lỗi có «Thử lại» khi chưa có gì |
+| Chương | H1 | Đổi truyện/đang tải hoặc lỗi tải danh sách vẫn hiện «Không có chương nào khớp bộ lọc» | `StatusBlock` theo `chaptersStatus`: đang tải / lỗi + «Thử lại» / truyện chưa có chương (+ «Upload .txt») / không khớp bộ lọc (+ «Xoá bộ lọc») |
+| Khung (TopBar) | H4, H8 | Desktop 1280px: ô chọn giao diện chiếm chỗ, ô «Tìm» bị bóp vỡ chữ thành 3–4 dòng, tên truyện trên breadcrumb bị ép mất | `.theme-select` gọn; ≤1440px ô Tìm chỉ còn icon + ⌘K và ẩn chip thể loại |
+
+Ngoài ra (mức nhẹ, đã sửa luôn): ô tìm chương ở 360px chỉ rộng ~40px → chiếm cả hàng; cmdk hiện «Không có kết quả» bằng `StatusBlock`, có `role="dialog"`, `aria-activedescendant`, Enter chạy đúng mục đang focus; nhãn cmdk «Đi đến Bản dịch» → «Đi đến Đọc»; bỏ dòng giả «+12 thuật ngữ từ batch trước» ở Thuật ngữ; thêm `aria-label` cho nút chỉ có icon (trước/sau, zoom ảnh, sửa/xoá thuật ngữ) và ô nhập không có nhãn; bản prod hết 404 `/favicon.ico` trong console (favicon SVG nội tuyến).
+
+### 8.3 Mức trung bình / nhẹ chưa sửa → ticket sau
+
+| Màn | Mức | Vấn đề | Lý do chưa sửa |
+|---|---|---|---|
+| Cài đặt | Trung bình | Ô «Concurrency», «Chunk size» không lưu đi đâu (chỉnh không có tác dụng) | Cần quyết định đưa vào `novel.md` hay bỏ; không đổi định dạng dữ liệu trong ticket này |
+| Cài đặt | Trung bình | ≤768px khối «Thống kê truyện» chiếm ~200px cuối màn, form cuộn trong khung thấp | Cần đổi bố cục cuộn của cả trang; không chặn sửa |
+| Chương | Trung bình | ≤768px ẩn cột checkbox → không chọn nhiều chương để dịch trên điện thoại | Cần thiết kế lại thanh chọn trên mobile |
+| cmdk, Modal, overlay đối chiếu | Trung bình | Chưa giữ focus trong hộp thoại (Tab đi ra phần nền) | Cần helper focus-trap dùng chung; đụng guard phím của overlay |
+| Chương, đối chiếu | Nhẹ | Menu chọn engine OCR chưa đóng bằng Esc/không di chuyển bằng mũi tên; Esc khi menu mở thì đóng luôn overlay (hành vi cũ) | Giữ nguyên guard Esc hiện có (TC30) |
+| Nhiều màn | Nhẹ | Còn chữ tiếng Anh: «Glossary», «Upload .txt», «hits», «Concurrency», «Chunk size», bảng Tweaks («Visual», «Density», «Reading font») | Đổi nhãn hàng loạt nên làm riêng, kèm rà thuật ngữ |
+| Chương | Nhẹ | Bảng «Hoạt động agent» dựng giả từ trạng thái chương (Extractor «queued» cố định) | Cần dữ liệu thật từ SSE |
+| Thuật ngữ | Nhẹ | Hàng bảng dùng `key` theo chỉ số; bảng dài không sắp/phân trang | Không ảnh hưởng dữ liệu |
+| Đọc | Nhẹ | Bản dev vẫn 404 `/favicon.ico` (Babel chạy sau khi trang nạp) | `index.html` ngoài phạm vi W6 — xem §7.2 |
 
 ---
 
@@ -331,6 +371,18 @@ suspendKeys, fontMode, onFontMode(v)
 - Repo **không có** `docs/architecture.md` / `docs/plans/` / sprint `docs/delivery/` tại thời điểm viết tài liệu này.
 - File test tự động UX chưa có trong phạm vi W1; W2 thêm `check-contrast.mjs`; W4 thêm seed; W6 chạy checklist headless kế hoạch §4.
 
+### 9.1 Kiểm tổng W6
+
+- **Tĩnh:** esbuild 0.24.0 cho mọi JSX đã sửa; `node frontend/build.mjs` xong; `python -m compileall -q backend scripts`; `node frontend/tools/check-contrast.mjs` thoát 0.
+- **Chạy:** `scripts/seed_ux_demo.py --root /tmp/vp-ux`, uvicorn trỏ vào dữ liệu mẫu, một bản `DEV_MODE=true` và một bản prod (sau `build.mjs`); thêm một bản `API_TOKEN` cho `/login`. Trình duyệt: Chromium headless (Playwright), 1280×800, 384×800, 360×740, `vp:theme` sáng và tối.
+- **Kết quả (dev và prod đều đạt):**
+  - Không cuộn ngang ở 6 màn app + overlay + `/login`, cả 3 khổ và 2 theme (TC19/TC21).
+  - Luồng đọc: TC2 (cột ~60–70 ký tự, Noto Serif), TC3/TC4/TC5/TC6/TC7, ←/→, TC8/TC10/TC11, TC12, TC13 (A↔B liên tục khi `/api/chapters` trễ 2s), TC14 (chương đã nhớ mất → mở chương 2; xuất hiện lại → đọc được), TC15, TC16/TC17/TC18, TC20, TC22/TC23 (offline, file bản dịch mất), TC24, TC25 (thêm chương 4 khi đang đọc: `scrollTop` giữ nguyên, «Chương sau» → 4), chương đang đọc rời khỏi `done` (giữ nội dung + ghi chú), danh sách đang tải hiện loading, TC27, TC28, TC29.
+  - Hồi quy: TC30 (đang gõ trong ô sửa: Esc, Ctrl+←/→ không đóng/không đổi chương; nút đóng hỏi confirm), TC31 (sửa `novel.md` trên đĩa rồi Lưu → hộp thoại 409, file không bị ghi đè), TC32 (upload `.txt`, Dịch tất cả, Dịch lại, thêm thuật ngữ từ bôi đen, OCR ảnh: đúng route và payload như cũ).
+  - Wiki có dữ liệu (API giả lập) và cmdk dùng bằng bàn phím: đạt ở mọi khổ/theme.
+  - TC33: bản prod không có lỗi console.
+- **Giới hạn môi trường:** không có API key nên không dịch thật; TC25/«rời khỏi done» kích hoạt nạp lại danh sách bằng một job giả (SSE `done` của orchestrator) thay vì job dịch thật. Máy chụp headless thiếu font chữ Hán (hiện ô vuông) — không ảnh hưởng bố cục đo được. Script kiểm nằm ngoài repo (không thuộc phạm vi file được sửa), chưa có test runner UX trong repo.
+
 ---
 
-*Tài liệu tạo bởi đầu việc W1 — T-950d2566. Các đầu việc sau cập nhật §7.2 và §8 khi hoàn thành.*
+*Tài liệu tạo bởi đầu việc W1 — T-950d2566. W6 cập nhật §3.2, §7.2, §8 và §9.1 sau kiểm tổng.*

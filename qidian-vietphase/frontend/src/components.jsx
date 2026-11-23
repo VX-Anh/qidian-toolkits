@@ -193,4 +193,4 @@ function OcrProgress({ page = 0, total = 0, width = 150 }) {
   );
 }
 
-Object.assign(window, { Icon, Badge, Modal, Toast, IconBtn, OcrProgress });
+Object.assign(window, { Icon, Badge, StatusBlock, Modal, Toast, IconBtn, OcrProgress });

@@ -27,7 +27,7 @@ function CommandPalette({ open, onClose, novels, chapters, glossary, onAction })
       { id: "go-chapters",     group: "Điều hướng", icon: "list",    label: "Đi đến Chương",        sub: "G C" },
       { id: "go-glossary",     group: "Điều hướng", icon: "hash",    label: "Đi đến Thuật ngữ",     sub: "G T" },
       { id: "go-wiki",         group: "Điều hướng", icon: "book",    label: "Đi đến Story-Wiki",    sub: "G W" },
-      { id: "go-output",       group: "Điều hướng", icon: "bookOpen",label: "Đi đến Bản dịch",      sub: "G B" },
+      { id: "go-output",       group: "Điều hướng", icon: "bookOpen",label: "Đi đến Đọc",           sub: "G B" },
       { id: "go-settings",     group: "Điều hướng", icon: "settings",label: "Đi đến Cài đặt",       sub: "G S" },
     ].filter(a => !Q || a.label.toLowerCase().includes(Q));
     out.push(...actions);
@@ -111,41 +111,45 @@ function CommandPalette({ open, onClose, novels, chapters, glossary, onAction })
 
   return (
     <div className="cmdk-scrim" onClick={onClose}>
-      <div className="cmdk" onClick={e => e.stopPropagation()}>
+      <div className="cmdk" role="dialog" aria-modal="true" aria-label="Tìm và chạy lệnh" onClick={e => e.stopPropagation()}>
         <input
           ref={inputRef}
           className="cmdk-input"
+          aria-label="Tìm chương, thuật ngữ, hoặc lệnh"
+          aria-controls="cmdk-list"
+          aria-activedescendant={items[sel] ? `cmdk-opt-${sel}` : undefined}
           placeholder="Tìm chương, thuật ngữ, hoặc lệnh…"
           value={q}
           onChange={e => setQ(e.target.value)}
         />
-        <div className="cmdk-list">
+        <div className="cmdk-list" id="cmdk-list">
           {groups.length === 0 && (
-            <div style={{ padding: 32, textAlign: "center", color: "var(--fg-4)", fontSize: 13 }}>
-              Không có kết quả nào.
-            </div>
+            <StatusBlock kind="empty" title="Không có kết quả nào" desc="Thử từ khoá khác: số chương, tên Hán/Việt, hoặc tên lệnh." />
           )}
           {groups.map((g, gi) => (
-            <React.Fragment key={gi}>
-              <div className="cmdk-group">{g.name}</div>
+            <div key={gi} role="group" aria-label={g.name}>
+              <div className="cmdk-group" aria-hidden="true">{g.name}</div>
               {g.items.map((it) => (
-                <div
+                <button
+                  type="button"
                   key={it.id}
+                  id={`cmdk-opt-${it.idx}`}
                   className={`cmdk-item ${it.idx === sel ? "sel" : ""}`}
                   onMouseEnter={() => setSel(it.idx)}
+                  onFocus={() => setSel(it.idx)}
                   onClick={() => { onAction(it); onClose(); }}
                 >
                   <span className="ico"><Icon name={it.icon} size={14} /></span>
                   <span className="lbl">{it.label}</span>
                   {it.sub && <span className="sub">{it.sub}</span>}
-                </div>
+                </button>
               ))}
-            </React.Fragment>
+            </div>
           ))}
         </div>
-        <div style={{
+        <div className="cmdk-foot" style={{
           padding: "8px 14px", borderTop: "1px solid var(--border)",
-          display: "flex", gap: 12, fontSize: 10, color: "var(--fg-5)",
+          display: "flex", flexWrap: "wrap", gap: 12, fontSize: 10, color: "var(--fg-4)",
           background: "var(--bg-app)",
         }}>
           <span><span className="kbd">↑↓</span> chọn</span>

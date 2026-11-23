@@ -448,7 +448,11 @@ function OutputScreen({
         desc="Tải chương lên và chạy dịch ở danh sách chương, bản dịch sẽ hiện ở đây."
         actions={onGoChapters ? btn("Về danh sách chương", onGoChapters, "primary", "list") : null} />
     );
-  } else if (loading || (!content && !error && cur)) {
+  } else if (!cur) {
+    // Danh sách vừa "ready" nhưng effect chọn chương chưa chạy (render đầu tiên):
+    // chưa có chương nào để hiện — không được rơi xuống nhánh dùng cur.chapter_num.
+    body = <RdStatus kind="loading" title="Đang mở chương…" />;
+  } else if (loading || (!content && !error)) {
     body = (
       <div className="rd-loading">
         <RdStatus kind="loading" title={`Đang tải chương ${cur?.chapter_num ?? ""}…`} />

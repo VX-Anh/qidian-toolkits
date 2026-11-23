@@ -123,11 +123,11 @@ function TopBar({
 
       <button className="search-pill" onClick={onOpenCmdk} aria-label="Tìm chương, thuật ngữ">
         <Icon name="search" size={13} />
-        <span>Tìm chương, thuật ngữ…</span>
+        <span className="sp-text">Tìm chương, thuật ngữ…</span>
         <span className="kbd">⌘K</span>
       </button>
 
-      <select className="input-field" aria-label="Giao diện sáng tối"
+      <select className="input-field theme-select" aria-label="Giao diện sáng tối" title="Giao diện: Hệ thống / Sáng / Tối"
         value={theme} onChange={e => onTheme(e.target.value)}>
         <option value="system">Hệ thống</option>
         <option value="light">Sáng</option>

@@ -293,6 +293,24 @@ input[type="checkbox"] {
   width: 220px;
 }
 .search-pill:hover { border-color: var(--border-hover); }
+.search-pill { flex-shrink: 0; white-space: nowrap; }
+.search-pill .sp-text { overflow: hidden; text-overflow: ellipsis; }
+.crumb .chip { flex-shrink: 0; }
+/* Chọn giao diện sáng/tối trên TopBar: gọn, không bị bóp/giãn theo flex */
+.theme-select {
+  flex-shrink: 0;
+  width: auto;
+  height: 30px;
+  padding: 2px 8px;
+  font-size: var(--text-sm);
+}
+/* Desktop hẹp (≤1440px): TopBar chật — bỏ chữ trong ô Tìm và chip thể loại
+   để tab và tên truyện không bị bóp méo. */
+@media (max-width: 1440px) {
+  .search-pill { width: auto; }
+  .search-pill .sp-text { display: none; }
+  .crumb .chip { display: none; }
+}
 .search-pill .kbd {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -728,6 +746,8 @@ input[type="checkbox"] {
 }
 .film-thumb {
   flex-shrink: 0;
+  padding: 0;
+  font: inherit;
   width: 48px; height: 64px;
   border-radius: 3px;
   border: 1.5px solid var(--border);
@@ -997,6 +1017,12 @@ input[type="checkbox"] {
   color: var(--fg-5);
 }
 .cmdk-item {
+  width: 100%;
+  background: none;
+  border: 0;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
   padding: 8px 12px;
   border-radius: var(--radius);
   font-size: 13px;
@@ -1149,6 +1175,8 @@ input[type="checkbox"] {
   overflow-y: auto;
 }
 .settings-card {
+  /* Không co theo flex của .settings-main (màn thấp/hẹp bị cắt mất nội dung thẻ). */
+  flex-shrink: 0;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1435,6 +1463,122 @@ input[type="checkbox"] {
 }
 .seg button.on,
 .seg button[aria-pressed="true"] { background: var(--bg-app); color: var(--fg-1); }
+.seg button:hover:not([aria-pressed="true"]):not(.on) { color: var(--fg-1); }
+/* Segmented control nằm trên thanh công cụ (đối chiếu, cài đặt) */
+.seg.inline { display: inline-flex; gap: 2px; max-width: 100%; }
+.seg.inline button { flex: 0 0 auto; padding: 4px 10px; font-weight: 500; }
+
+/* ── Menu thả xuống (chọn engine OCR…) ───────────────────────────────── */
+.menu-pop {
+  position: absolute;
+  top: 100%;
+  margin-top: 4px;
+  z-index: 30;
+  min-width: 230px;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  color: var(--fg-1);
+  font-size: var(--text-sm);
+  text-align: left;
+}
+.menu-item:hover { background: var(--bg-elevated); }
+.menu-item .muted { color: var(--fg-4); }
+
+/* ── Nút dạng liên kết (mở chương, chọn thực thể trong Wiki) ─────────── */
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.link-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ── Bộ lọc dạng chip bấm được (danh sách chương) ────────────────────── */
+.chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-3);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+.chip-btn:hover { color: var(--fg-1); border-color: var(--border-hover); }
+.chip-btn .count { color: var(--fg-4); font-family: var(--font-mono); font-size: 10px; }
+.chip-btn[aria-pressed="true"] { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border); }
+.chip-btn[aria-pressed="true"] .count { color: var(--accent); }
+.chip .chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 0 2px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* ── Danh sách thực thể Story-Wiki ───────────────────────────────────── */
+.wiki-ent-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 14px;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.wiki-ent-item:hover { background: var(--bg-hover); }
+.wiki-ent-item[aria-current="true"] { border-left-color: var(--accent); background: var(--bg-elevated); }
+.wiki-label {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-4);
+  font-weight: 600;
+}
+.wiki-rel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .term-form .row { display: flex; gap: 8px; align-items: center; }
 .term-form .row .arrow { color: var(--fg-5); font-size: 13px; }
 
@@ -1577,6 +1721,7 @@ input[type="checkbox"] {
   .work-toolbar .spacer,
   .work-filters .spacer { flex-basis: 100%; height: 0; }
   .work-toolbar .btn { flex: 1 1 auto; justify-content: center; }
+  .work-filters .work-search { flex: 1 1 100% !important; max-width: none !important; }
 
   /* Bảng chương: ẩn cột phụ (checkbox·1, Tên Trung·3, Thuật ngữ·6).
      Giữ #·2, Tên Việt·4, Trạng thái·5, Review/Mở·7. */
@@ -1656,6 +1801,19 @@ input[type="checkbox"] {
     border-left: 0;
     border-bottom-color: var(--accent);
   }
+  /* Khối "Trích xuất từ AI" nằm trong hàng tab ngang: thu thành một nút gọn,
+     nếu không chữ mô tả xuống dòng từng chữ và đẩy bảng thuật ngữ mất chỗ. */
+  .glossary-tabs .gloss-extract {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: none;
+    border: 0;
+  }
+  .glossary-tabs .gloss-extract-desc { display: none; }
+  .glossary-tabs .gloss-extract .btn { width: auto !important; white-space: nowrap; }
   .gloss-toolbar,
   .gloss-add-row { flex-wrap: wrap; padding-left: 12px; padding-right: 12px; }
   .gloss-table td.notes { display: none; }

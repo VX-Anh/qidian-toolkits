@@ -18,6 +18,23 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showGlossInline": true
 }/*EDITMODE-END*/;
 
+// ── Favicon ───────────────────────────────────────────────────────────────────
+// Backend không phục vụ /favicon.ico → trình duyệt báo 404 trong console. Gắn icon
+// SVG nội tuyến (chữ "A" trên nền accent) nếu trang chưa khai báo icon.
+(function vpEnsureFavicon() {
+  try {
+    if (document.querySelector('link[rel~="icon"]')) return;
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+      + '<rect width="32" height="32" rx="7" fill="#4f46e5"/>'
+      + '<text x="16" y="22.5" font-family="Georgia,serif" font-size="19" font-weight="700" fill="#fff" text-anchor="middle">A</text></svg>';
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/svg+xml";
+    link.href = "data:image/svg+xml," + encodeURIComponent(svg);
+    document.head.appendChild(link);
+  } catch { /* không có DOM — bỏ qua */ }
+})();
+
 // ── API helpers ───────────────────────────────────────────────────────────────
 // Lỗi HTTP kèm `detail` từ FastAPI; message vẫn bắt đầu bằng mã status (code cũ
 // kiểm tra kiểu startsWith("409")).
@@ -127,7 +144,9 @@ function App() {
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
   const [wikiEntities, setWikiEntities] = useStateA([]);
+  const [wikiStatus, setWikiStatus] = useStateA("loading");
   const [novelMd, setNovelMd] = useStateA("");
+  const [novelMdStatus, setNovelMdStatus] = useStateA("loading");
 
   const [isRunning, setIsRunning] = useStateA(false);
   const [checked, setChecked] = useStateA({});
@@ -262,7 +281,11 @@ function App() {
       novelMdMeta.current = { slug, version: data.version ?? null, dirty: false };
       window.__vpSettingsDirty = false;
       setNovelMd(data.content || "");
-    } catch { /* ignore */ }
+      setNovelMdStatus("ready");
+    } catch {
+      // Lỗi nạp lại nền khi đã có bản tải trước đó: giữ nguyên, chỉ báo lỗi khi chưa có gì.
+      if (currentSlugRef.current === slug && novelMdMeta.current.slug !== slug) setNovelMdStatus("error");
+    }
   }
 
   function editNovelMd(value) {
@@ -285,7 +308,11 @@ function App() {
       const data = await api.get(`/api/wiki/${encodeURIComponent(slug)}/entities`);
       if (currentSlugRef.current !== slug) return;
       setWikiEntities(Array.isArray(data) ? data : []);
-    } catch { setWikiEntities([]); }
+      setWikiStatus("ready");
+    } catch {
+      // Giữ danh sách đang có (nạp lại nền khi đang dịch có thể lỗi tạm thời).
+      if (currentSlugRef.current === slug) setWikiStatus("error");
+    }
   }
 
   // Load novels on mount
@@ -376,6 +403,8 @@ function App() {
     // Xoá dữ liệu truyện cũ ngay để không hiện/lưu nhầm trong lúc chờ tải.
     novelMdMeta.current = { slug: null, version: null, dirty: false };
     setNovelMd("");
+    setNovelMdStatus("loading");
+    setWikiStatus("loading");
     loadChapters(currentSlug);
     loadGlossary(currentSlug);
     loadNovelMd(currentSlug);
@@ -849,6 +878,7 @@ function App() {
     setChapters([]);
     setGlossary({ characters: [], places: [], realms: [], skills: [] });
     setWikiEntities([]);
+    setWikiStatus("loading");
     setChecked({});
     setStreamingTexts({});
     setOpenChapter(null);
@@ -959,6 +989,8 @@ function App() {
           {tab === "chapters" && (
             <ChaptersScreen
               chapters={chapters}
+              chaptersStatus={chaptersStatus}
+              onReloadChapters={reloadReaderChapters}
               isRunning={isRunning}
               agents={agents}
               showActivity={tweaks.showActivity}
@@ -998,7 +1030,12 @@ function App() {
           )}
 
           {tab === "wiki" && (
-            <WikiScreen entities={wikiEntities} novelSlug={currentSlug} />
+            <WikiScreen
+              entities={wikiEntities}
+              novelSlug={currentSlug}
+              status={wikiStatus}
+              onReload={() => { if (currentSlug) { setWikiStatus("loading"); loadWiki(currentSlug); } }}
+            />
           )}
 
           {tab === "output" && (
@@ -1023,6 +1060,8 @@ function App() {
             <SettingsScreen
               novel={currentNovel}
               novelMd={novelMd}
+              mdStatus={novelMdStatus}
+              onReloadMd={() => { if (currentSlug) { setNovelMdStatus("loading"); loadNovelMd(currentSlug, { force: true }); } }}
               onChange={editNovelMd}
               onSave={saveNovelMd}
             />
