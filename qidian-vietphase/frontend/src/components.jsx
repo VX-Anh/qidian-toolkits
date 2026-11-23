@@ -11,6 +11,7 @@ function Icon({ name, size = 16, color = "currentColor", className = "" }) {
       width={size} height={size} viewBox="0 0 24 24" fill="none"
       stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"
       className={className}
+      aria-hidden="true"
       style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0 }}
     >
       {paths.map((d, i) => (
@@ -59,6 +60,12 @@ const ICONS = {
   zap:      ["M13 2 3 14h7l-1 8 10-12h-7z"],
   layers:   ["m12 3 8 5-8 5-8-5z M4 13l8 5 8-5 M4 18l8 5 8-5"],
   command:  ["M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"],
+  sun:      ["c:,12,12,4", "M12 2v2 M12 20v2 M2 12h2 M20 12h2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4"],
+  moon:     ["M20.9 13.3A9 9 0 0 1 10.7 3.1a9 9 0 1 0 10.2 10.2z"],
+  monitor:  ["r:,2,3,20,14,2", "M12 17v4 M8 21h8"],
+  type:     ["M4 19l6-14 6 14 M6 15h8 M16 13h6 M19 13v6"],
+  menu:     ["M4 6h16 M4 12h16 M4 18h16"],
+  wifiOff:  ["M3 3l18 18 M2 8.8a16 16 0 0 1 2.4-1.6 M8.6 5.7A16 16 0 0 1 22 8.8 M5 12.5a11 11 0 0 1 3.4-2 M14 10.2a11 11 0 0 1 5 2.3 M8.5 16a5 5 0 0 1 7 0", "c:,12,20,0.8"],
   refresh:  ["M3 12a9 9 0 0 1 15-6.7L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-15 6.7L3 16 M3 21v-5h5"],
   panel:    ["r:,3,3,18,18,2", "l:,15,3,15,21"],
   arrowDown:["M12 5v14 M5 12l7 7 7-7"],
@@ -89,6 +96,26 @@ function Badge({ status, label }) {
       {ico && <span style={{ marginRight: 2 }}>{ico}</span>}
       {label || map[status] || status}
     </span>
+  );
+}
+
+// ── Trạng thái tải, lỗi và rỗng
+function StatusBlock({ kind, title, desc, actions }) {
+  const { icon, label } = {
+    loading: { icon: "refresh", label: "Đang tải…" },
+    error: { icon: "alert", label: "Có lỗi xảy ra" },
+    empty: { icon: "bookOpen", label: "Chưa có dữ liệu" },
+  }[kind];
+
+  return (
+    <div className={`status-block ${kind}`}>
+      <div className="status-block-message" role={kind === "error" ? "alert" : "status"}>
+        <Icon name={icon} size={22} className={`status-block-icon${kind === "loading" ? " spin" : ""}`} />
+        <div className="status-block-title">{title || label}</div>
+        {desc && <div>{desc}</div>}
+      </div>
+      {actions && <div className="status-block-actions">{actions}</div>}
+    </div>
   );
 }
 
