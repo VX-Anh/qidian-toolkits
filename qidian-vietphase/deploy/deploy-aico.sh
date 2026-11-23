@@ -52,8 +52,14 @@ docker builder prune -f --reserved-space 3gb >/dev/null 2>&1 || docker builder p
 docker image prune -f >/dev/null
 
 # Kiểm tra từ trong mạng của cloudflared (đúng đường tunnel sẽ gọi).
-sleep 3
-if docker run --rm --network ai-company_workers curlimages/curl:8.11.1 -fsS http://vietphase:9999/health; then
+ok=
+for _ in $(seq 1 30); do
+    if docker run --rm --network ai-company_workers curlimages/curl:8.11.1 -fsS http://vietphase:9999/health 2>/dev/null; then
+        ok=1; break
+    fi
+    sleep 2
+done
+if [ -n "$ok" ]; then
     echo; echo "VietPhase chạy. Public: https://read.aico.io.vn (cần route tunnel read.aico.io.vn -> http://vietphase:9999)"
 else
     echo "Container chưa trả /health — xem: docker logs vietphase"; exit 1

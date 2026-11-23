@@ -39,7 +39,7 @@ services:
       OCR_DEFAULT_ENGINE: ${OCR_DEFAULT_ENGINE:-claude}
       OCR_SERVICE_URL: ${OCR_SERVICE_URL:-}
     # Sau Cloudflare: tin X-Forwarded-Proto để cookie đăng nhập có cờ Secure (https).
-    command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999",
+    command: ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999",
               "--proxy-headers", "--forwarded-allow-ips", "*"]
     volumes:
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/data:/data

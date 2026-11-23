@@ -47,4 +47,4 @@ EXPOSE 9999
 ENTRYPOINT ["/docker-entrypoint.sh"]
 # Một worker duy nhất: SQLite + RLock là per-process, không scale ngang trong
 # container này (đúng với mô hình single-user đã chọn).
-CMD ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999"]
+CMD ["uv", "run", "--no-sync", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999"]
