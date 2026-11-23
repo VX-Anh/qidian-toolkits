@@ -157,5 +157,5 @@ docker compose exec vietphase \
 ### Gửi chương từ extension lên server đã host
 
 Trong popup extension, đặt **Server URL** = địa chỉ public của bạn
-(vd `https://vietphase.ten-mien-cua-ban.com`) rồi bấm **🚀 Gửi text → server**.
+(vd `https://vietphase.aico.io.vn` — extension đã có sẵn quyền cho `aico.io.vn` và mọi subdomain; domain khác sẽ được hỏi cấp quyền khi bấm gửi) rồi bấm **🚀 Gửi text → server**.
 Extension POST file `.txt` tới `POST /api/chapters/upload`.

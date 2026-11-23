@@ -7,7 +7,9 @@
   "host_permissions": [
     "https://www.qidian.com/*",
     "http://localhost/*",
-    "http://127.0.0.1/*"
+    "http://127.0.0.1/*",
+    "https://aico.io.vn/*",
+    "https://*.aico.io.vn/*"
   ],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "action": {

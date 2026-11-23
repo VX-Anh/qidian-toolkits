@@ -166,7 +166,7 @@ function withToken(url) {
   return t ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(t)}` : url;
 }
 
-// Manifest chỉ cấp sẵn quyền cho qidian + localhost. Server khác → xin quyền
+// Manifest cấp sẵn quyền cho qidian, localhost và aico.io.vn (+ subdomain). Server khác → xin quyền
 // cho đúng origin đó (optional_host_permissions). Gọi ngay đầu click handler để
 // còn trong user gesture.
 async function ensureServerPermission() {
