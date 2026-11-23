@@ -64,6 +64,9 @@ FAKE_CLI = textwrap.dedent("""\
     import json, sys
     sys.stdout.reconfigure(encoding="utf-8")
     mode = sys.argv[1]
+    if mode == "early":   # thoát trước khi đọc prompt (vd chưa đăng nhập)
+        sys.stderr.write("Not logged in")
+        sys.exit(1)
     sys.stdin.read()
     def out(o): print(json.dumps(o, ensure_ascii=False), flush=True)
     text = open(sys.argv[2], encoding="utf-8").read()
@@ -99,11 +102,13 @@ class RunTest(unittest.TestCase):
         self.state._conn.close()   # Windows: phải đóng SQLite trước khi xoá thư mục tạm
         self.tmp.cleanup()
 
-    def _run(self, mode: str):
-        ct.cli_command = lambda _sp: [sys.executable, str(self.dir / "fake_cli.py"), mode,
-                                      str(self.dir / "reply.txt")]
-        profile = NovelProfile(slug="truyen", zh_name="", vi_name="Truyện", genre="", style="", custom_prompt="Dịch.")
-        agent = ct.CliTranslatorAgent(self.fn, "原文", "truyen", profile, self.state, self.dir / "out")
+    def _run(self, mode: str, content: str = "原文", prompt: str = "Dịch."):
+        def cmd(sp_file):
+            self.system_prompt_seen = Path(sp_file).read_text(encoding="utf-8")
+            return [sys.executable, str(self.dir / "fake_cli.py"), mode, str(self.dir / "reply.txt")]
+        ct.cli_command = cmd
+        profile = NovelProfile(slug="truyen", zh_name="", vi_name="Truyện", genre="", style="", custom_prompt=prompt)
+        agent = ct.CliTranslatorAgent(self.fn, content, "truyen", profile, self.state, self.dir / "out")
 
         async def go():
             return [e async for e in agent.run()]
@@ -125,6 +130,22 @@ class RunTest(unittest.TestCase):
             self._run("fail")
         self.assertIn("Not logged in", str(cm.exception))
         self.assertNotEqual(self.state.get_chapter(self.fn)["status"], ChapterStatus.DONE)
+
+    def test_early_exit_with_big_prompt_is_unavailable(self):
+        with self.assertRaises(ct.CliUnavailable) as cm:
+            self._run("early", content="字" * (1 << 20))
+        self.assertIn("Not logged in", str(cm.exception))
+
+    def test_big_system_prompt_goes_through_file(self):
+        big = "Dịch. " + "林凡 → Lâm Phàm; " * 5000
+        self._run("ok", prompt=big)
+        self.assertIn(big.strip(), self.system_prompt_seen)
+
+    def test_command_uses_system_prompt_file(self):
+        cmd = self._orig("/tmp/sp.txt")
+        self.assertIn("--system-prompt-file", cmd)
+        self.assertEqual(cmd[cmd.index("--system-prompt-file") + 1], "/tmp/sp.txt")
+        self.assertEqual(cmd[cmd.index("--tools") + 1], "")
 
     def test_result_error_is_unavailable(self):
         with self.assertRaises(ct.CliUnavailable):

@@ -66,7 +66,7 @@ Copy `.env.example` → `.env`, fill in:
 - `LLM_EFFORT` — `low` (default) … `max`; sent as `output_config.effort`
 - `INPUT_DIR` / `OUTPUT_DIR` / `CONCURRENCY`
 
-- `TRANSLATE_PROVIDER` — `api` (default) or `cli`: translate chapters with the Claude Code CLI (`claude -p` headless, subscription login) via `backend/agent/cli_translator.py`. No tool use there: the model returns `<tieu_de>/<ban_dich>/<tom_tat>/<thuat_ngu>` and the backend calls the same `save_chapter`/`save_summary`/`flag_unknown_term`. CLI failure (not logged in, quota, timeout) → `CliUnavailable` → retried with the API when `CLI_FALLBACK_API=true`. Extractor/reviewer/wiki/OCR always use the API. Settings: `CLI_BIN`, `CLI_MODEL`, `CLI_EFFORT`, `CLI_TIMEOUT`.
+- `TRANSLATE_PROVIDER` — `api` (default) or `cli`: translate chapters with the Claude Code CLI (`claude -p` headless, subscription login) via `backend/agent/cli_translator.py`. No tool use there: the model returns `<tieu_de>/<ban_dich>/<tom_tat>/<thuat_ngu>` and the backend calls the same `save_chapter`/`save_summary`/`flag_unknown_term`. CLI failure (not logged in, quota, timeout) → `CliUnavailable` → retried with the API when `CLI_FALLBACK_API=true`. Extractor/reviewer/wiki/OCR always use the API. Settings: `CLI_BIN`, `CLI_MODEL`, `CLI_EFFORT`, `CLI_TIMEOUT`. On Windows run uvicorn without `--reload` when using the CLI (reload uses a SelectorEventLoop, which cannot spawn subprocesses; translations would fall back to the API).
 
 Do not name settings with a `CLAUDE_` prefix: Claude Code exports variables such as `CLAUDE_EFFORT`, which pydantic-settings would pick up.
 

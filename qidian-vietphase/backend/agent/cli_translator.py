@@ -145,7 +145,7 @@ def build_prompt(filename: str, content: str, prev_summary: str | None,
     return "\n".join(parts)
 
 
-def cli_command(system_prompt: str) -> list[str]:
+def cli_command(system_prompt_file: str) -> list[str]:
     cmd = [
         settings.cli_bin, "-p",            # prompt qua stdin
         "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -154,7 +154,9 @@ def cli_command(system_prompt: str) -> list[str]:
         "--setting-sources", "",           # bỏ settings/hook của máy
         "--no-session-persistence",
         "--model", settings.cli_model or settings.llm_model,
-        "--system-prompt", system_prompt,
+        # Qua file: glossary lớn vượt giới hạn một đối số dòng lệnh (Windows ~32K ký tự,
+        # Linux 128 KiB).
+        "--system-prompt-file", system_prompt_file,
     ]
     if settings.cli_effort:
         cmd += ["--effort", settings.cli_effort]
@@ -203,22 +205,32 @@ class CliTranslatorAgent:
 
         # cwd là thư mục tạm rỗng: CLI không thấy mã nguồn/dữ liệu (dù không có tool).
         with tempfile.TemporaryDirectory(prefix="vp-cli-") as cwd:
+            sp_file = Path(cwd) / "system-prompt.txt"
+            sp_file.write_text(self.profile.system_prompt(), encoding="utf-8")
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    *cli_command(self.profile.system_prompt()),
+                    *cli_command(str(sp_file)),
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE, cwd=cwd, limit=_LINE_LIMIT,
                     env={**os.environ, "NO_COLOR": "1"},
                 )
-            except (FileNotFoundError, PermissionError) as exc:
-                raise CliUnavailable(f"Không chạy được Claude CLI ({settings.cli_bin}): {exc}") from exc
+            except (OSError, NotImplementedError) as exc:
+                # NotImplementedError: event loop không hỗ trợ subprocess (Windows + uvicorn
+                # --reload dùng SelectorEventLoop) → chạy server không --reload khi dùng CLI.
+                raise CliUnavailable(f"Không chạy được Claude CLI ({settings.cli_bin}): "
+                                     f"{type(exc).__name__}: {exc}") from exc
 
             stderr_task = asyncio.create_task(proc.stderr.read())   # type: ignore[union-attr]
             try:
                 async with asyncio.timeout(settings.cli_timeout):
-                    proc.stdin.write(prompt.encode("utf-8"))        # type: ignore[union-attr]
-                    await proc.stdin.drain()                        # type: ignore[union-attr]
-                    proc.stdin.close()                              # type: ignore[union-attr]
+                    try:
+                        proc.stdin.write(prompt.encode("utf-8"))    # type: ignore[union-attr]
+                        await proc.stdin.drain()                    # type: ignore[union-attr]
+                        proc.stdin.close()                          # type: ignore[union-attr]
+                    except (BrokenPipeError, ConnectionResetError):
+                        # CLI thoát trước khi đọc hết prompt (vd chưa đăng nhập): đọc tiếp
+                        # stdout/stderr, mã thoát ≠ 0 bên dưới thành CliUnavailable.
+                        pass
                     async for raw in proc.stdout:                   # type: ignore[union-attr]
                         try:
                             msg = json.loads(raw)
