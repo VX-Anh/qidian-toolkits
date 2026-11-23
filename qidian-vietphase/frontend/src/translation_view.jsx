@@ -42,26 +42,47 @@ function TranslationView({
   const [ocrPage, setOcrPage] = useStateT(0);
   const [ocrTotal, setOcrTotal] = useStateT(0);
   const ocrEsRef = useRefT(null);
+  const ocrPollRef = useRefT(null);
+  // Chương đang mở — response fetch về muộn của chương khác sẽ bị bỏ qua, tránh
+  // hiện (rồi lỡ tay lưu) nội dung chương A dưới tên chương B.
+  const currentFnRef = useRefT(null);
+  currentFnRef.current = chapter?.filename ?? null;
+  const isCurrent = (fn) => currentFnRef.current === fn;
+
+  // Pane nào đang mở editor (chưa lưu) → hỏi trước khi đóng/chuyển chương.
+  const editingRef = useRefT({});
+  const onEditingChange = useCbT((key, on) => {
+    editingRef.current[key] = on;
+    window.__vpDirty = Object.values(editingRef.current).some(Boolean);
+  }, []);
+  const confirmDiscard = () =>
+    !Object.values(editingRef.current).some(Boolean)
+    || window.confirm("Đang sửa dở chưa lưu. Bỏ thay đổi?");
+  const guardedClose = () => { if (confirmDiscard()) onClose(); };
+  const guardedPrev  = () => { if (confirmDiscard()) onPrev(); };
+  const guardedNext  = () => { if (confirmDiscard()) onNext(); };
 
   // Fetch source text + pre-translate segments (re-callable after OCR)
   const loadSource = useCbT(() => {
     if (!chapter) return;
-    const fn = encodeURIComponent(chapter.filename);
+    const raw = chapter.filename;
+    const fn = encodeURIComponent(raw);
     fetch(`/api/chapters/${fn}/source`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => d && setSourceText(d.content || ""))
+      .then(d => { if (d && isCurrent(raw)) setSourceText(d.content || ""); })
       .catch(() => {});
     if (novelSlug) {
       fetch(`/api/chapters/${fn}/pretranslate?novel_slug=${encodeURIComponent(novelSlug)}`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d) { setSegments(d.segments || []); setSubCount(d.substitution_count || 0); } })
+        .then(d => { if (d && isCurrent(raw)) { setSegments(d.segments || []); setSubCount(d.substitution_count || 0); } })
         .catch(() => {});
     }
   }, [chapter?.filename, novelSlug]);
 
   useEffectT(() => {
     if (!chapter) return;
-    const fn = encodeURIComponent(chapter.filename);
+    const raw = chapter.filename;
+    const fn = encodeURIComponent(raw);
     setView(defaultView(isImage));
     setPageIdx(0);
     setSourceText(""); setSegments(null); setSubCount(0);
@@ -74,7 +95,7 @@ function TranslationView({
     if (chapter.status === "done") {
       fetch(`/api/chapters/${fn}/output`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => d && setOutputText((d.content || "").replace(/\r\n/g, "\n")))
+        .then(d => { if (d && isCurrent(raw)) setOutputText((d.content || "").replace(/\r\n/g, "\n")); })
         .catch(() => {});
     }
 
@@ -83,16 +104,19 @@ function TranslationView({
       fetch(`/api/ocr/${encodeURIComponent(novelSlug)}/${encodeURIComponent(job)}/images`)
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-          if (d && d.images) {
+          if (d && d.images && isCurrent(raw)) {
             setImages(d.images.map(n => `/api/ocr/${encodeURIComponent(novelSlug)}/${encodeURIComponent(job)}/images/${encodeURIComponent(n)}`));
           }
         })
         .catch(() => {});
     }
+    // Đổi chương / unmount → đóng stream OCR + dừng poll của chương cũ, để sự kiện
+    // của chương A không cập nhật trạng thái hay nạp source vào chương B.
+    return () => {
+      if (ocrEsRef.current) { ocrEsRef.current.close(); ocrEsRef.current = null; }
+      if (ocrPollRef.current) { clearInterval(ocrPollRef.current); ocrPollRef.current = null; }
+    };
   }, [chapter?.filename]);
-
-  // Cleanup OCR stream on unmount
-  useEffectT(() => () => { if (ocrEsRef.current) ocrEsRef.current.close(); }, []);
 
   const runOcr = (engine) => {
     setOcrMenu(false);
@@ -140,6 +164,7 @@ function TranslationView({
           if (done) return;
           setOcrStatus("Mất kết nối stream — đang chờ kết quả OCR…");
           let tries = 0;
+          if (ocrPollRef.current) clearInterval(ocrPollRef.current);
           const iv = setInterval(() => {
             tries += 1;
             fetch(`/api/chapters/${encodeURIComponent(chapter.filename)}/source`)
@@ -157,6 +182,7 @@ function TranslationView({
               })
               .catch(() => {});
           }, 5000);
+          ocrPollRef.current = iv;
         };
       })
       .catch(err => { setOcrRunning(false); setOcrStatus("Lỗi: " + err.message); });
@@ -164,13 +190,26 @@ function TranslationView({
 
   useEffectT(() => {
     const h = (e) => {
-      if (e.key === "Escape") onClose();
-      if (e.key === "ArrowLeft" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onPrev(); }
-      if (e.key === "ArrowRight" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onNext(); }
+      // Đang gõ trong textarea/input: Esc, ⌘←/→ là phím soạn thảo (về đầu/cuối dòng),
+      // không được đóng overlay hay chuyển chương làm mất bản đang sửa.
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (e.key === "Escape") guardedClose();
+      if (e.key === "ArrowLeft" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); guardedPrev(); }
+      if (e.key === "ArrowRight" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); guardedNext(); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [onClose, onNext, onPrev]);
+
+  // Đóng tab / reload khi đang sửa dở → trình duyệt hỏi lại.
+  useEffectT(() => {
+    const h = (e) => {
+      if (Object.values(editingRef.current).some(Boolean)) { e.preventDefault(); e.returnValue = ""; }
+    };
+    window.addEventListener("beforeunload", h);
+    return () => { window.removeEventListener("beforeunload", h); window.__vpDirty = false; };
+  }, []);
 
   if (!chapter) return null;
 
@@ -210,7 +249,7 @@ function TranslationView({
   return (
     <div className="tv-overlay">
       <div className="tv-head">
-        <button className="btn ghost sm" onClick={onClose}>
+        <button className="btn ghost sm" onClick={guardedClose}>
           <Icon name="back" size={13} /> Danh sách
         </button>
         <div style={{ width: 1, height: 16, background: "var(--border)" }} />
@@ -278,10 +317,10 @@ function TranslationView({
             </div>
           )}
           <div style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
-          <button className="btn ghost sm" onClick={onPrev} title="Chương trước (⌘←)">
+          <button className="btn ghost sm" onClick={guardedPrev} title="Chương trước (⌘←)">
             <Icon name="prev" size={13} />
           </button>
-          <button className="btn ghost sm" onClick={onNext} title="Chương sau (⌘→)">
+          <button className="btn ghost sm" onClick={guardedNext} title="Chương sau (⌘→)">
             <Icon name="next" size={13} />
           </button>
           <button className="btn primary sm" onClick={onRetranslate} disabled={isStreaming}>
@@ -313,7 +352,14 @@ function TranslationView({
             ocrPage={ocrPage}
             ocrTotal={ocrTotal}
             onAddTerm={onAddTerm}
-            onSaveSource={(text) => { setSourceText(text); setSegments(null); onSaveSource?.(text); }}
+            onEditingChange={onEditingChange}
+            onSaveSource={async (text) => {
+              const ok = await onSaveSource?.(text);
+              if (ok === false) return false;
+              setSourceText(text);
+              loadSource();   // build lại pretranslate segments từ bản vừa lưu
+              return true;
+            }}
           />
         )}
 
@@ -325,6 +371,7 @@ function TranslationView({
             translated={translated}
             isStreaming={isStreaming}
             onSaveOutput={onSaveOutput}
+            onEditingChange={onEditingChange}
           />
         )}
       </div>
@@ -389,7 +436,7 @@ function ImagePane({ images, pageIdx, onPage }) {
 }
 
 // ── OCR / source pane (middle) ─────────────────────────────────────────
-function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight, chapter, ocrRunning, ocrStatus, ocrPage, ocrTotal, onAddTerm, onSaveSource }) {
+function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight, chapter, ocrRunning, ocrStatus, ocrPage, ocrTotal, onAddTerm, onSaveSource, onEditingChange }) {
   // Default ON: show the source with glossary proper-nouns pre-replaced to
   // Vietnamese (the "VietPhase" step that runs before AI translation) — this
   // matches the panel's purpose ("Bản gốc đã thay tên").
@@ -416,7 +463,15 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
   }, [sel]);
 
   const enterEdit = () => { setDraft(sourceText || ""); setEditing(true); setSel(null); };
-  const commitEdit = () => { onSaveSource?.(draft); setEditing(false); };
+  const [saving, setSaving] = useStateT(false);
+  useEffectT(() => { onEditingChange?.("source", editing); }, [editing]);
+  useEffectT(() => () => onEditingChange?.("source", false), []);
+  const commitEdit = async () => {
+    setSaving(true);
+    const ok = await onSaveSource?.(draft);
+    setSaving(false);
+    if (ok !== false) setEditing(false);   // lỗi → giữ editor + bản nháp
+  };
 
   const onBodyMouseUp = () => {
     const s = window.getSelection();
@@ -451,7 +506,7 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
         </span>
         {editing ? (
           <>
-            <button className="btn success sm" onClick={commitEdit}><Icon name="save" size={11} /> Lưu</button>
+            <button className="btn success sm" onClick={commitEdit} disabled={saving}><Icon name="save" size={11} /> {saving ? "Đang lưu…" : "Lưu"}</button>
             <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
           </>
         ) : (
@@ -556,7 +611,7 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
 }
 
 // ── Vietnamese translation pane (right) ────────────────────────────────
-function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput }) {
+function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput, onEditingChange }) {
   const [override, setOverride] = useStateT(null); // local saved edit
   const [editing, setEditing] = useStateT(false);
   const [draft, setDraft] = useStateT("");
@@ -570,7 +625,17 @@ function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput }
     navigator.clipboard.writeText(display).catch(() => {});
   };
   const enterEdit = () => { setDraft(display || ""); setEditing(true); };
-  const commitEdit = () => { setOverride(draft); onSaveOutput?.(draft); setEditing(false); };
+  const [saving, setSaving] = useStateT(false);
+  useEffectT(() => { onEditingChange?.("output", editing); }, [editing]);
+  useEffectT(() => () => onEditingChange?.("output", false), []);
+  const commitEdit = async () => {
+    setSaving(true);
+    const ok = await onSaveOutput?.(draft);
+    setSaving(false);
+    if (ok === false) return;               // lỗi → giữ editor + bản nháp
+    setOverride(draft);
+    setEditing(false);
+  };
 
   return (
     <div className="tv-pane vi">
@@ -584,7 +649,7 @@ function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput }
         )}
         {editing ? (
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-            <button className="btn success sm" onClick={commitEdit}><Icon name="save" size={11} /> Lưu</button>
+            <button className="btn success sm" onClick={commitEdit} disabled={saving}><Icon name="save" size={11} /> {saving ? "Đang lưu…" : "Lưu"}</button>
             <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
           </div>
         ) : (

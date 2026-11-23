@@ -158,7 +158,8 @@ function App() {
   // ── Data loading ─────────────────────────────────────────────────────
   async function loadChapters(slug) {
     try {
-      const data = await api.get(`/api/chapters?novel_slug=${slug}`);
+      const data = await api.get(`/api/chapters?novel_slug=${encodeURIComponent(slug)}`);
+      if (currentSlugRef.current !== slug) return;   // đã đổi truyện → bỏ response cũ
       setChapters(prev => data.map(ch => {
         // Preserve any live progress already tracked in the UI
         const existing = prev.find(c => c.filename === ch.filename);
@@ -188,7 +189,8 @@ function App() {
 
   async function loadGlossary(slug) {
     try {
-      const data = await api.get(`/api/novels/${slug}`);
+      const data = await api.get(`/api/novels/${encodeURIComponent(slug)}`);
+      if (currentSlugRef.current !== slug) return;
       setGlossary({
         characters: data.characters || [],
         places:     data.places     || [],
@@ -198,16 +200,43 @@ function App() {
     } catch { /* ignore */ }
   }
 
-  async function loadNovelMd(slug) {
+  // novel.md đang sửa trong Settings: nhớ nó thuộc truyện nào, version lúc tải, và
+  // có đang sửa dở không — để (1) không lưu nội dung truyện A sang truyện B, (2) không
+  // ghi đè thay đổi của extractor/glossary (server trả 409), (3) nạp lại nền không
+  // xoá bản đang sửa dở.
+  const novelMdMeta = useRefA({ slug: null, version: null, dirty: false });
+
+  async function loadNovelMd(slug, { force = false } = {}) {
     try {
-      const data = await api.get(`/api/novels/${slug}/raw`);
+      const data = await api.get(`/api/novels/${encodeURIComponent(slug)}/raw`);
+      if (currentSlugRef.current !== slug) return;
+      const m = novelMdMeta.current;
+      if (m.dirty && m.slug === slug && !force) return;   // giữ bản đang sửa dở
+      novelMdMeta.current = { slug, version: data.version ?? null, dirty: false };
+      window.__vpSettingsDirty = false;
       setNovelMd(data.content || "");
     } catch { /* ignore */ }
   }
 
+  function editNovelMd(value) {
+    novelMdMeta.current.dirty = true;
+    window.__vpSettingsDirty = true;
+    setNovelMd(value);
+  }
+
+  // Đóng tab/reload khi Settings còn sửa dở novel.md → trình duyệt hỏi lại.
+  useEffectA(() => {
+    const h = (e) => {
+      if (novelMdMeta.current.dirty) { e.preventDefault(); e.returnValue = ""; }
+    };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, []);
+
   async function loadWiki(slug) {
     try {
-      const data = await api.get(`/api/wiki/${slug}/entities`);
+      const data = await api.get(`/api/wiki/${encodeURIComponent(slug)}/entities`);
+      if (currentSlugRef.current !== slug) return;
       setWikiEntities(Array.isArray(data) ? data : []);
     } catch { setWikiEntities([]); }
   }
@@ -287,6 +316,10 @@ function App() {
   // Load data when slug changes
   useEffectA(() => {
     if (!currentSlug) return;
+    // Xoá dữ liệu truyện cũ ngay để không hiện/lưu nhầm trong lúc chờ tải.
+    novelMdMeta.current = { slug: null, version: null, dirty: false };
+    setNovelMd("");
+    setChapters([]);
     loadChapters(currentSlug);
     loadGlossary(currentSlug);
     loadNovelMd(currentSlug);
@@ -360,7 +393,7 @@ function App() {
           setIsRunning(false);
           setToast({ msg: "Dịch xong!", type: "success" });
           if (esRef.current) { esRef.current.close(); esRef.current = null; }
-          if (currentSlugRef.current === jobSlug) { loadChapters(jobSlug); loadGlossary(jobSlug); loadWiki(jobSlug); }
+          if (currentSlugRef.current === jobSlug) { loadChapters(jobSlug); loadGlossary(jobSlug); loadNovelMd(jobSlug); loadWiki(jobSlug); }
         } else if (type === "cancelled") {
           setIsRunning(false);
           if (esRef.current) { esRef.current.close(); esRef.current = null; }
@@ -559,8 +592,9 @@ function App() {
       } else {
         content += `\n\n${marker}\n\n| Tiếng Trung | Tiếng Việt | Ghi chú |\n|---|---|---|\n${newRow}\n`;
       }
-      await api.put(`/api/novels/${currentSlug}/raw`, { content });
+      await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content, version: rawData.version });
       await loadGlossary(currentSlug);
+      await loadNovelMd(currentSlug);
       setToast({ msg: "Đã thêm thuật ngữ", type: "success" });
     } catch (err) {
       setToast({ msg: `Lỗi thêm thuật ngữ: ${err.message}`, type: "error" });
@@ -584,8 +618,9 @@ function App() {
       const idx = lines.findIndex(l => l.trim() === oldRow);
       if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
       lines[idx] = newRow;
-      await api.put(`/api/novels/${currentSlug}/raw`, { content: lines.join("\n") });
+      await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content: lines.join("\n"), version: rawData.version });
       await loadGlossary(currentSlug);
+      await loadNovelMd(currentSlug);
       setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
     } catch (err) {
       setToast({ msg: `Lỗi sửa thuật ngữ: ${err.message}`, type: "error" });
@@ -601,8 +636,9 @@ function App() {
       const idx = lines.findIndex(l => l.trim() === oldRow);
       if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
       lines.splice(idx, 1);
-      await api.put(`/api/novels/${currentSlug}/raw`, { content: lines.join("\n") });
+      await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content: lines.join("\n"), version: rawData.version });
       await loadGlossary(currentSlug);
+      await loadNovelMd(currentSlug);
       setToast({ msg: "Đã xoá thuật ngữ", type: "success" });
     } catch (err) {
       setToast({ msg: `Lỗi xoá thuật ngữ: ${err.message}`, type: "error" });
@@ -614,8 +650,10 @@ function App() {
     try {
       await api.put(`/api/chapters/${encodeURIComponent(filename)}/source`, { content: text });
       setToast({ msg: "Đã lưu bản gốc", type: "success" });
+      return true;
     } catch (err) {
-      setToast({ msg: `Lỗi lưu bản gốc: ${err.message}`, type: "error" });
+      setToast({ msg: `Lỗi lưu bản gốc: ${err.message} — bản nháp vẫn giữ trong ô sửa`, type: "error" });
+      return false;
     }
   }
 
@@ -623,20 +661,39 @@ function App() {
     try {
       await api.put(`/api/chapters/${encodeURIComponent(filename)}/output`, { content: text });
       setToast({ msg: "Đã lưu bản dịch", type: "success" });
+      return true;
     } catch (err) {
-      setToast({ msg: `Lỗi lưu bản dịch: ${err.message}`, type: "error" });
+      setToast({ msg: `Lỗi lưu bản dịch: ${err.message} — bản nháp vẫn giữ trong ô sửa`, type: "error" });
+      return false;
     }
   }
 
   // ── Novel.md save ────────────────────────────────────────────────────
   async function saveNovelMd() {
     if (!currentSlug) return;
+    const meta = novelMdMeta.current;
+    if (meta.slug !== currentSlug) {
+      setToast({ msg: "novel.md chưa tải xong cho truyện này — thử lại sau giây lát", type: "error" });
+      return;
+    }
     try {
-      await api.put(`/api/novels/${currentSlug}/raw`, { content: novelMd });
+      await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`,
+                    { content: novelMd, version: meta.version });
+      novelMdMeta.current.dirty = false;
       await loadGlossary(currentSlug);
+      await loadNovelMd(currentSlug, { force: true });
       setToast({ msg: "Đã lưu novel.md", type: "success" });
     } catch (err) {
-      setToast({ msg: `Lỗi lưu: ${err.message}`, type: "error" });
+      if (String(err.message).startsWith("409")) {
+        const reload = window.confirm(
+          "novel.md vừa bị thay đổi ở nơi khác (extractor hoặc thêm/sửa thuật ngữ).\n\n"
+          + "OK = tải bản mới nhất (bỏ phần bạn đang sửa)\n"
+          + "Cancel = giữ bản đang sửa để bạn copy lại phần cần giữ");
+        if (reload) await loadNovelMd(currentSlug, { force: true });
+        else setToast({ msg: "Chưa lưu — novel.md trên server đã khác bản bạn đang sửa", type: "error" });
+      } else {
+        setToast({ msg: `Lỗi lưu: ${err.message}`, type: "error" });
+      }
     }
   }
 
@@ -693,6 +750,8 @@ function App() {
   function selectNovel(slug) {
     setRailOpen(false);  // đóng drawer mobile khi chọn truyện
     if (slug === currentSlugRef.current) return;
+    const dirty = novelMdMeta.current.dirty || window.__vpDirty;
+    if (dirty && !window.confirm("Đang sửa dở chưa lưu (novel.md hoặc chương). Bỏ thay đổi và chuyển truyện?")) return;
     setCurrentSlug(slug);
     setChapters([]);
     setGlossary({ characters: [], places: [], realms: [], skills: [] });
@@ -845,7 +904,7 @@ function App() {
             <SettingsScreen
               novel={currentNovel}
               novelMd={novelMd}
-              onChange={setNovelMd}
+              onChange={editNovelMd}
               onSave={saveNovelMd}
             />
           )}

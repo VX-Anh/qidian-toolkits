@@ -38,16 +38,24 @@ def get_novel(slug: str):
         raise HTTPException(404, f"Novel '{slug}' not found")
 
 
+def _md_version(path: Path) -> str:
+    return str(path.stat().st_mtime_ns)
+
+
 @router.get("/{slug}/raw")
 def get_novel_raw(slug: str):
     path = settings.rules_dir / slug / "novel.md"
     if not path.exists():
         raise HTTPException(404)
-    return {"content": path.read_text(encoding="utf-8")}
+    with NOVEL_MD_LOCK:
+        return {"content": path.read_text(encoding="utf-8"), "version": _md_version(path)}
 
 
 class NovelRawBody(BaseModel):
     content: str
+    # version lấy từ GET /raw. Có gửi mà file đã đổi (extractor / tab khác vừa ghi)
+    # → 409 thay vì đè mất thay đổi đó. Không gửi = ghi đè (tương thích cũ).
+    version: str | None = None
 
 
 @router.put("/{slug}/raw")
@@ -56,8 +64,10 @@ def update_novel_raw(slug: str, body: NovelRawBody):
     if not path.exists():
         raise HTTPException(404)
     with NOVEL_MD_LOCK:
+        if body.version is not None and body.version != _md_version(path):
+            raise HTTPException(409, "novel.md đã bị thay đổi ở nơi khác — tải lại rồi sửa")
         write_novel_md(path, body.content)
-    return {"ok": True}
+        return {"ok": True, "version": _md_version(path)}
 
 
 class CreateNovelBody(BaseModel):
