@@ -147,6 +147,18 @@ class RunTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--system-prompt-file") + 1], "/tmp/sp.txt")
         self.assertEqual(cmd[cmd.index("--tools") + 1], "")
 
+    def test_env_drops_api_keys(self):
+        import os
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        os.environ["API_TOKEN"] = "y"
+        try:
+            env = ct.cli_env()
+        finally:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            os.environ.pop("API_TOKEN", None)
+        self.assertNotIn("ANTHROPIC_API_KEY", env)
+        self.assertNotIn("API_TOKEN", env)
+
     def test_result_error_is_unavailable(self):
         with self.assertRaises(ct.CliUnavailable):
             self._run("quota")

@@ -198,7 +198,7 @@ class Orchestrator:
                     if review and review.get("status") == "needs_fix"
                     else None
                 )
-                use_api = settings.translate_provider != "cli"
+                use_api = settings.translate_provider.strip().lower() != "cli"
                 if not use_api:
                     cli_agent = CliTranslatorAgent(
                         filename=filename,

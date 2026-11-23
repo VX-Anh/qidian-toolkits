@@ -36,6 +36,14 @@ CLOSE_TAG = "</ban_dich>"
 # Giới hạn một dòng stream-json (bản dịch dài nằm trọn trong event "assistant"/"result").
 _LINE_LIMIT = 64 * 1024 * 1024
 _STDERR_TAIL = 2000
+# Không đưa cho CLI: key API (CLI sẽ tính tiền API thay vì gói đăng ký) và token của app.
+_ENV_DROP = {"ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_FILE", "ANTHROPIC_AUTH_TOKEN", "API_TOKEN"}
+
+
+def cli_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if k not in _ENV_DROP}
+    env["NO_COLOR"] = "1"
+    return env
 
 
 class CliUnavailable(RuntimeError):
@@ -212,7 +220,7 @@ class CliTranslatorAgent:
                     *cli_command(str(sp_file)),
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE, cwd=cwd, limit=_LINE_LIMIT,
-                    env={**os.environ, "NO_COLOR": "1"},
+                    env=cli_env(),
                 )
             except (OSError, NotImplementedError) as exc:
                 # NotImplementedError: event loop không hỗ trợ subprocess (Windows + uvicorn
@@ -236,6 +244,8 @@ class CliTranslatorAgent:
                             msg = json.loads(raw)
                         except ValueError:
                             continue
+                        if not isinstance(msg, dict):
+                            continue
                         kind = msg.get("type")
                         if kind == "stream_event":
                             ev = msg.get("event") or {}
@@ -256,14 +266,16 @@ class CliTranslatorAgent:
                                 final_text = msg["result"]
                     await proc.wait()
             except TimeoutError:
-                proc.kill()
-                await proc.wait()
                 raise CliUnavailable(f"Claude CLI quá {settings.cli_timeout} giây") from None
-            except asyncio.CancelledError:
-                proc.kill()
-                await proc.wait()
-                raise
+            except (ValueError, asyncio.LimitOverrunError) as exc:
+                # Một dòng stream-json vượt _LINE_LIMIT.
+                raise CliUnavailable(f"Đọc output Claude CLI lỗi: {exc}") from exc
             finally:
+                # Mọi đường thoát (timeout, huỷ, lỗi lạ, generator bị đóng sớm): không để
+                # tiến trình CLI chạy mồ côi, rồi mới chờ stderr (EOF khi tiến trình đã chết).
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
                 stderr = (await stderr_task).decode("utf-8", "replace")[-_STDERR_TAIL:]
 
         if result_error or proc.returncode != 0 or final_text is None:
