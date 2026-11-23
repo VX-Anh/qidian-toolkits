@@ -7,12 +7,9 @@ from google import genai
 from ..config import settings
 from .base import BaseAgent, AgentEvent
 from .novel_loader import NovelProfile
-from .rate_limiter import RateLimiter
 from .state import ChapterStatus, SharedState
 from .tools import ToolRegistry
 
-# ~2500 từ Trung mỗi chunk (an toàn với 4096 output token)
-CHUNK_SIZE = 2500
 
 
 def _make_registry(
@@ -52,14 +49,29 @@ def _make_registry(
         novel_out = output_dir / novel_slug
         novel_out.mkdir(parents=True, exist_ok=True)
 
-        chapter_info = state.get_chapter(filename)
-        num = chapter_info["chapter_num"] if chapter_info else 0
-        safe_title = re.sub(r'[\\/:*?"<>|]', "", vi_title).strip()
-        out_path = novel_out / f"Chuong_{num:04d}_{safe_title}.txt"
+        chapter_info = state.get_chapter(filename) or {}
+        num = chapter_info.get("chapter_num") or 0
+        safe_title = re.sub(r'[\\/:*?"<>|\r\n]', "", vi_title).strip()[:120] or "khong-ten"
+        if num > 0:
+            out_path = novel_out / f"Chuong_{num:04d}_{safe_title}.txt"
+        else:
+            # Không parse được số chương → mọi chương đều num=0, tên trùng nhau nếu cùng
+            # tiêu đề. Dùng tên file nguồn (duy nhất) làm tiền tố.
+            out_path = novel_out / f"{Path(filename).stem}_{safe_title}.txt"
 
         out_path.write_bytes(
             f"# {vi_title}\n\n{content.strip()}\n".encode("utf-8")
         )
+
+        # Dịch lại ra tiêu đề khác → tên file khác: xoá bản cũ để không còn hai bản.
+        old = chapter_info.get("translated_path")
+        if old and Path(old) != out_path:
+            try:
+                old_p = Path(old).resolve()
+                if old_p.is_file() and old_p.is_relative_to(novel_out.resolve()):
+                    old_p.unlink()
+            except OSError:
+                pass
 
         await state.set_status(
             filename,
@@ -93,14 +105,12 @@ class TranslatorAgent(BaseAgent):
         profile: NovelProfile,
         state: SharedState,
         client: genai.Client,
-        rate_limiter: RateLimiter,
         output_dir: Path,
         review_issues: str | None = None,
     ):
         self.filename = filename
         self.content = content
         self.profile = profile
-        self.rate_limiter = rate_limiter
         self.review_issues = review_issues
 
         reg = _make_registry(state, filename, novel_slug, output_dir, profile)
@@ -115,13 +125,10 @@ class TranslatorAgent(BaseAgent):
         return self.profile.system_prompt()
 
     async def run(self, _: str = "") -> AsyncIterator[AgentEvent]:
-        chunks = self._split_chunks(self.content)
-        n = len(chunks)
-
         user_msg = (
             f"Dịch file chương: '{self.filename}'\n"
-            f"Nội dung gồm {n} phần. Dưới đây là toàn bộ nội dung:\n\n"
-            + "\n\n---\n\n".join(chunks)
+            "Dưới đây là toàn bộ nội dung:\n\n"
+            + self.content.strip()
             + "\n\n---\n\n"
             "Hướng dẫn:\n"
             "1. Tên riêng trong bảng thuật ngữ đã được thay sang tiếng Việt trước. Giữ nguyên các tên riêng tiếng Việt này khi dịch.\n"
@@ -135,20 +142,6 @@ class TranslatorAgent(BaseAgent):
         if self.review_issues:
             user_msg += f"\n\n[LẦN TRƯỚC CÓ VẤN ĐỀ — HÃY SỬA]\n{self.review_issues}"
 
-        # Rate limit giờ áp cho MỌI lượt gọi model trong BaseAgent.run (limiter dùng chung).
+        # Rate limit áp cho MỌI lượt gọi model trong BaseAgent.run (limiter dùng chung).
         async for event in super().run(user_msg):
             yield event
-
-    def _split_chunks(self, text: str) -> list[str]:
-        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-        chunks, current, size = [], [], 0
-        for para in paragraphs:
-            para_len = len(para)
-            if size + para_len > CHUNK_SIZE and current:
-                chunks.append("\n\n".join(current))
-                current, size = [], 0
-            current.append(para)
-            size += para_len
-        if current:
-            chunks.append("\n\n".join(current))
-        return chunks or [text]

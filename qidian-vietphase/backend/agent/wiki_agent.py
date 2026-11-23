@@ -10,8 +10,7 @@ trích ngữ cảnh giàu (mô tả, alias, quan hệ, sự kiện) cho mỗi ch
 Bất biến: novel.md là vua cho `vi`. WikiAgent chỉ ghi SQLite; `vi` ưu tiên lấy từ
 glossary đã-duyệt, chỉ dùng đề xuất của model khi term chưa có trong glossary.
 """
-from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from google import genai
 

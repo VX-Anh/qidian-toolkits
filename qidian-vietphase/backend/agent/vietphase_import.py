@@ -11,6 +11,8 @@ và (nếu chưa có) copy output.txt vào input_dir thành file nguồn .txt.
 import re
 from pathlib import Path
 
+from .novel_loader import render_novel_template
+
 from .orchestrator import parse_chapter_filename
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -130,49 +132,8 @@ def _humanize_slug(slug: str) -> str:
 
 
 def _novel_template(slug: str, settings) -> str:
-    """Lấy nội dung novel.md mặc định cho slug mới (ưu tiên rules/_template.md)."""
-    tpl = settings.rules_dir / "_template.md"
-    vi_name = _humanize_slug(slug)
-    if tpl.exists():
-        return (
-            tpl.read_text(encoding="utf-8")
-            .replace("NOVEL_ZH_NAME", "")
-            .replace("NOVEL_VI_NAME", vi_name)
-            .replace("NOVEL_GENRE", "tiên hiệp")
-        )
-    return f"""---
-zh_name: ""
-vi_name: "{vi_name}"
-genre: tiên hiệp
-style: trang trọng, nhiều Hán Việt
-status: đang dịch
----
-
-## Prompt dịch
-
-Bạn là dịch giả tiểu thuyết tiên hiệp Trung-Việt chuyên nghiệp.
-Dịch sang tiếng Việt tự nhiên, trang trọng, ưu tiên từ Hán Việt cho thuật ngữ tu luyện.
-
-## Nhân vật
-
-| Tiếng Trung | Tiếng Việt | Ghi chú |
-|---|---|---|
-
-## Địa danh
-
-| Tiếng Trung | Tiếng Việt | Ghi chú |
-|---|---|---|
-
-## Cảnh giới tu luyện
-
-| Tiếng Trung | Tiếng Việt | Ghi chú |
-|---|---|---|
-
-## Kỹ năng / Pháp thuật
-
-| Tiếng Trung | Tiếng Việt | Ghi chú |
-|---|---|---|
-"""
+    """novel.md mặc định cho slug mới tạo từ folder (chưa biết tên Trung)."""
+    return render_novel_template(settings.rules_dir, "", _humanize_slug(slug))
 
 
 def ensure_novels_from_folders(settings) -> list[str]:

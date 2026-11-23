@@ -17,7 +17,7 @@ OCR_PROMPT = (
 )
 
 
-def _parse_filename(tab_title: str, ocr_text: str) -> str:
+def _parse_filename(tab_title: str, ocr_text: str, fallback: str = "ocr") -> str:
     """Derive a proper chapter filename from the browser tab title or OCR first line.
 
     tab.title on qidian.com is typically:
@@ -30,7 +30,8 @@ def _parse_filename(tab_title: str, ocr_text: str) -> str:
     else:
         first_line = ocr_text.split('\n')[0].strip() if ocr_text else tab_title
         title = first_line if re.match(r'^第\d+章', first_line) else tab_title
-    return re.sub(r'[\\/:*?"<>|]', '', title).strip() + '.txt'
+    name = re.sub(r'[\\/:*?"<>|\r\n]', '', title or '').strip().strip('.')
+    return (name[:150] or f"ocr_{fallback}") + '.txt'
 
 
 async def run_ocr(
@@ -68,22 +69,8 @@ async def run_ocr(
                 await event_queue.put({"type": "ocr_token", "text": delta})
 
         full_text = "".join(text_chunks).strip()
-
-        filename = out_filename or _parse_filename(chapter_title_hint, full_text)
-
-        settings.input_dir.mkdir(parents=True, exist_ok=True)
-        dest = settings.input_dir / filename
-        dest.write_text(full_text, encoding="utf-8")
-
-        num, zh_title = parse_chapter_filename(filename)
-        await state.upsert_chapter(filename, novel_slug, num, zh_title, ocr_job_id=job_id)
-
-        await event_queue.put({
-            "type": "ocr_done",
-            "filename": filename,
-            "char_count": len(full_text),
-            "preview": full_text[:400],
-        })
+        await _finalize_ocr(job_id, novel_slug, chapter_title_hint, full_text,
+                            state, event_queue, settings, out_filename)
 
     except Exception as exc:
         await event_queue.put({"type": "ocr_error", "msg": str(exc)})
@@ -97,10 +84,17 @@ async def _finalize_ocr(
     """Ghi text ra input_dir, đăng ký chapter vào DB, phát ocr_done. Dùng chung cho
     cả hai nhánh (HTTP / subprocess). full_text đã strip. Trả True nếu có text."""
     if not full_text:
-        await event_queue.put({"type": "ocr_error", "msg": "PaddleOCR trả về rỗng"})
+        await event_queue.put({"type": "ocr_error", "msg": "OCR trả về rỗng"})
         return False
 
-    filename = out_filename or _parse_filename(chapter_title_hint, full_text)
+    filename = out_filename or _parse_filename(chapter_title_hint, full_text, job_id)
+    # filename là khoá toàn cục: OCR ra tên chương trùng với chương của truyện khác
+    # thì không được ghi đè file nguồn của truyện đó.
+    owner = state.get_chapter(filename)
+    if owner and owner.get("novel_slug") not in (novel_slug, "unknown", None):
+        await event_queue.put({"type": "ocr_error",
+                               "msg": f"'{filename}' đã thuộc truyện '{owner['novel_slug']}' — đổi tên chương rồi thử lại"})
+        return False
     settings.input_dir.mkdir(parents=True, exist_ok=True)
     (settings.input_dir / filename).write_text(full_text, encoding="utf-8")
 

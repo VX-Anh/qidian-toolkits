@@ -8,7 +8,6 @@ from ..config import settings
 from .extractor import ExtractorAgent
 from .novel_loader import NovelProfile, load_novel
 from .preprocessor import replace_proper_nouns
-from .rate_limiter import get_rate_limiter
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
 from .translator import TranslatorAgent
@@ -47,7 +46,6 @@ class Orchestrator:
         self.chapter_filenames = chapter_filenames  # None = dịch tất cả
         self.force = force  # True = dịch lại kể cả chương đã DONE
         self.run_wiki = run_wiki  # False = chỉ dịch, bỏ bước đưa vào Story-Wiki
-        self.rate_limiter = get_rate_limiter()
 
     async def run(self):
         try:
@@ -206,7 +204,6 @@ class Orchestrator:
                     profile=profile,
                     state=self.state,
                     client=self.client,
-                    rate_limiter=self.rate_limiter,
                     output_dir=self.output_dir,
                     review_issues=review_issues,
                 )

@@ -30,10 +30,12 @@ Each agent follows a **ReAct loop** in `backend/agent/base.py`: call Gemini (nat
 **Key files:**
 - `backend/agent/base.py` — BaseAgent ReAct loop, AgentEvent dataclass
 - `backend/agent/tools.py` — ToolRegistry, each agent builds its own registry via closure (captures chapter state without globals)
-- `backend/agent/state.py` — SharedState (SQLite, asyncio.Lock), EventQueue (SSE bridge with sentinel pattern)
+- `backend/agent/state.py` — SharedState (SQLite, one `threading.RLock` guarding the shared connection), EventQueue (SSE broadcast: every subscriber gets replayed history + live events; token events are live-only)
+- `backend/jobs.py` — JobRegistry: background tasks per job, closes queues of dead tasks, drops finished jobs after 10 min, one translate/extract job per novel
+- `backend/safety.py` — slug/filename validation + `safe_child()`; every client value joined into a path must go through it
 - `backend/agent/novel_loader.py` — Parses `rules/{slug}/novel.md` (YAML frontmatter + markdown tables) → NovelProfile
 - `backend/agent/orchestrator.py` — Not a ReAct agent; pure asyncio coordination harness
-- `backend/agent/translator.py` — TranslatorAgent: chunks content, injects NovelProfile.system_prompt()
+- `backend/agent/translator.py` — TranslatorAgent: sends the whole chapter in one message (glossary names pre-substituted), injects NovelProfile.system_prompt()
 - `backend/agent/extractor.py` — ExtractorAgent: resolves flagged terms → appends to novel.md
 
 **Data flow:**
@@ -42,7 +44,11 @@ Each agent follows a **ReAct loop** in `backend/agent/base.py`: call Gemini (nat
 - Per-novel config: `rules/{slug}/novel.md` — single source of truth for glossary + custom prompt
 
 **SSE pattern:**
-`POST /api/translate/start` → returns `job_id` → client opens `GET /api/translate/stream/{job_id}` (EventSource). EventQueue closes with `None` sentinel when Orchestrator finishes.
+`POST /api/translate/start` → returns `job_id` → client opens `GET /api/translate/stream/{job_id}` (EventSource). The stream ends when the job finishes; reopening it replays the history. Treat `onerror` as "ended" only when `readyState === CLOSED` (otherwise the browser is reconnecting).
+
+## Auth
+
+`API_TOKEN` (empty = no auth, local only) protects `/api/*`: cookie from `/login`, `X-API-Token` / `Authorization: Bearer` header, or `?token=` for EventSource. `DEV_MODE=true` enables FastAPI debug + `/_dev/ping` browser auto-reload.
 
 ## Novel Config (novel.md)
 

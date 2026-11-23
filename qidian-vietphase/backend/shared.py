@@ -8,6 +8,9 @@ from .agent.state import SharedState
 from .config import settings
 
 _state = SharedState(str(settings.db_path))
+_relocated = _state.relocate_outputs(settings.output_dir)
+if _relocated:
+    print(f"[db] trỏ lại {_relocated} bản dịch theo OUTPUT_DIR hiện tại", flush=True)
 _client: genai.Client | None = None
 
 

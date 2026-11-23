@@ -199,3 +199,34 @@ def _default_prompt() -> str:
         "Giữ nguyên cấu trúc đoạn văn. Không thêm bình luận hay giải thích. "
         "Tên riêng phải dịch đúng theo bảng thuật ngữ bên dưới."
     )
+
+
+def render_novel_template(rules_dir: Path, zh_name: str, vi_name: str,
+                          genre: str = "tiên hiệp") -> str:
+    """Nội dung novel.md cho truyện mới: ưu tiên rules/_template.md, không có thì
+    dùng template mặc định. Giá trị frontmatter được quote kiểu JSON (hợp lệ YAML)
+    để tên có dấu ':' hay '"' không làm hỏng YAML."""
+    import json as _json
+    tpl = Path(rules_dir) / "_template.md"
+    if tpl.exists():
+        return (tpl.read_text(encoding="utf-8")
+                .replace("NOVEL_ZH_NAME", zh_name)
+                .replace("NOVEL_VI_NAME", vi_name)
+                .replace("NOVEL_GENRE", genre))
+    table = "| Tiếng Trung | Tiếng Việt | Ghi chú |\n|---|---|---|\n"
+    sections = ["Nhân vật", "Địa danh", "Cảnh giới tu luyện", "Kỹ năng / Pháp thuật"]
+    return (
+        "---\n"
+        f"zh_name: {_json.dumps(zh_name, ensure_ascii=False)}\n"
+        f"vi_name: {_json.dumps(vi_name, ensure_ascii=False)}\n"
+        f"genre: {_json.dumps(genre, ensure_ascii=False)}\n"
+        "style: trang trọng, nhiều Hán Việt, không dùng từ hiện đại\n"
+        "status: đang dịch\n"
+        "---\n\n"
+        "## Prompt dịch\n\n"
+        f"Bạn là dịch giả tiểu thuyết {genre} Trung-Việt chuyên nghiệp.\n"
+        "Dịch sang tiếng Việt tự nhiên, trang trọng, ưu tiên từ Hán Việt cho thuật ngữ tu luyện.\n"
+        "Giữ nguyên cấu trúc đoạn văn. Không thêm bình luận hay giải thích.\n"
+        "Tên riêng phải dịch đúng theo bảng thuật ngữ bên dưới.\n"
+        + "".join(f"\n## {sec}\n\n{table}" for sec in sections)
+    )

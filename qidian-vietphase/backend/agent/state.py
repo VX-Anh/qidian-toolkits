@@ -444,14 +444,34 @@ class SharedState:
             out.append(d)
         return out
 
-    async def reset_novel(self, novel_slug: str):
+    def relocate_outputs(self, output_dir: Path) -> int:
+        """translated_path lưu đường dẫn tuyệt đối. DB copy từ máy khác (hoặc đổi
+        OUTPUT_DIR, chạy trong Docker) thì file "không tồn tại" dù bản dịch vẫn nằm
+        trong output_dir/{slug}/ → UI báo chưa dịch. Trỏ lại các đường dẫn đó nếu
+        tìm thấy file cùng tên trong output_dir hiện tại. Trả về số dòng đã sửa."""
+        from pathlib import PureWindowsPath
+        fixed = 0
         with self._tlock:
-            self._conn.execute(
-                "UPDATE chapters SET status='pending', vi_title=NULL, "
-                "translated_path=NULL, error=NULL WHERE novel_slug=?",
-                [novel_slug],
-            )
-            self._conn.commit()
+            rows = self._conn.execute(
+                "SELECT filename, novel_slug, translated_path FROM chapters "
+                "WHERE translated_path IS NOT NULL"
+            ).fetchall()
+            for r in rows:
+                old = r["translated_path"]
+                if Path(old).exists():
+                    continue
+                # Đường dẫn Windows đọc trên Linux không tách được bằng Path → dùng PureWindowsPath
+                name = PureWindowsPath(old).name if "\\" in old else Path(old).name
+                cand = Path(output_dir) / (r["novel_slug"] or "") / name
+                if cand.is_file():
+                    self._conn.execute(
+                        "UPDATE chapters SET translated_path=? WHERE filename=?",
+                        [str(cand.resolve()), r["filename"]],
+                    )
+                    fixed += 1
+            if fixed:
+                self._conn.commit()
+        return fixed
 
 
 class EventQueue:

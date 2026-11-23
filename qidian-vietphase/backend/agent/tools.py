@@ -1,5 +1,4 @@
 import asyncio
-import json
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, get_type_hints
 
@@ -12,11 +11,6 @@ class ToolResult:
     success: bool
     data: Any
     error: Optional[str] = None
-
-    def to_content(self) -> str:
-        if self.success:
-            return json.dumps(self.data) if not isinstance(self.data, str) else self.data
-        return f"ERROR: {self.error}"
 
     def to_response(self) -> dict:
         """Function response dict cho genai Part.from_function_response."""
@@ -59,9 +53,6 @@ class ToolRegistry:
             return []
         return [types.Tool(function_declarations=self._decls)]
 
-    def has_tools(self) -> bool:
-        return bool(self._decls)
-
     async def call(self, name: str, kwargs: dict) -> ToolResult:
         fn = self._fns.get(name)
         if fn is None:
@@ -74,6 +65,3 @@ class ToolRegistry:
         except Exception as exc:
             return ToolResult(name, False, None, str(exc))
 
-
-def make_registry() -> ToolRegistry:
-    return ToolRegistry()
