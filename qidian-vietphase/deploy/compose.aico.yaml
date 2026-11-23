@@ -1,0 +1,80 @@
+# VietPhase trên PC (Docker trong WSL), public tại https://read.aico.io.vn
+#
+# Đi qua Cloudflare Tunnel `aico-pc` của ai-company: cloudflared nằm ở mạng
+# `ai-company_workers`, route tunnel `read.aico.io.vn` -> http://vietphase:9999.
+# KHÔNG publish port nào ra máy — chỉ cloudflared gọi vào được.
+#
+# Chạy:  bash deploy/deploy-aico.sh   (từ Windows: xem đầu file script)
+#
+# Dữ liệu + bí mật nằm trên ổ WSL (đọc/ghi nhanh hơn /mnt/d, không lẫn vào repo):
+#   ${VIETPHASE_HOME:-/home/aico/vietphase}/data/      input/ output/ ocr_images/ vietphase/ db/
+#   ${VIETPHASE_HOME:-/home/aico/vietphase}/rules/     novel.md từng truyện (bền qua rebuild)
+#   ${VIETPHASE_HOME:-/home/aico/vietphase}/.env       API_TOKEN, GOOGLE_CLOUD_PROJECT...
+#   ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/gcp-sa.json
+name: vietphase
+
+services:
+  vietphase:
+    build:
+      context: ..
+    image: vietphase:latest
+    container_name: vietphase
+    restart: unless-stopped
+    mem_limit: 768m
+    env_file:
+      - ${VIETPHASE_HOME:-/home/aico/vietphase}/.env
+    environment:
+      INPUT_DIR: /data/input
+      OUTPUT_DIR: /data/output
+      OCR_IMAGES_DIR: /data/ocr_images
+      VIETPHASE_DIR: /data/vietphase
+      DB_PATH: /data/db/state.db
+      RULES_DIR: /rules
+      # Public ra Internet → bắt buộc có token (compose dừng nếu .env thiếu).
+      API_TOKEN: ${API_TOKEN:?Đặt API_TOKEN trong .env của VietPhase (xem deploy-aico.sh)}
+      DEV_MODE: "false"
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-sa.json
+      # PC không có GPU cho PaddleOCR → OCR mặc định bằng Gemini vision. Bật sidecar
+      # PaddleOCR (profile "ocr", chạy CPU, nặng RAM) thì đặt OCR_SERVICE_URL trong .env.
+      OCR_DEFAULT_ENGINE: ${OCR_DEFAULT_ENGINE:-gemini}
+      OCR_SERVICE_URL: ${OCR_SERVICE_URL:-}
+    # Sau Cloudflare: tin X-Forwarded-Proto để cookie đăng nhập có cờ Secure (https).
+    command: ["uv", "run", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999",
+              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    volumes:
+      - ${VIETPHASE_HOME:-/home/aico/vietphase}/data:/data
+      - ${VIETPHASE_HOME:-/home/aico/vietphase}/rules:/rules
+      - ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
+    networks:
+      workers:
+        aliases: [vietphase]
+      egress: {}     # ra Internet gọi Vertex AI
+
+  # PaddleOCR offline trên CPU (tuỳ chọn): docker compose --profile ocr up -d
+  # rồi đặt OCR_SERVICE_URL=http://vietphase-ocr:8000 + OCR_DEFAULT_ENGINE=paddle trong .env.
+  ocr:
+    profiles: [ocr]
+    build:
+      context: ../../qidian-ocr
+    image: qidian-ocr:latest
+    container_name: vietphase-ocr
+    restart: unless-stopped
+    mem_limit: 3g
+    environment:
+      PADDLE_TIER: small
+      PADDLE_DEVICE: cpu
+    volumes:
+      - ${VIETPHASE_HOME:-/home/aico/vietphase}/data:/data
+      - paddlex-models:/root/.paddlex
+    networks:
+      egress:
+        aliases: [vietphase-ocr]
+
+volumes:
+  paddlex-models:
+
+networks:
+  egress:
+  workers:
+    name: ai-company_workers
+    external: true

@@ -74,6 +74,29 @@ Orchestrator → TranslatorAgent × N (song song, giới hạn bằng semaphore)
 
 Chi tiết kiến trúc và các file chính xem [CLAUDE.md](CLAUDE.md).
 
+## Deploy lên read.aico.io.vn (PC, qua Cloudflare Tunnel)
+
+Chạy trong Docker của WSL trên PC, cạnh stack ai-company; ra Internet qua tunnel
+`aico-pc` (không mở port nào). Cấu hình: `deploy/compose.aico.yaml`.
+
+1. Chạy lần đầu để tạo thư mục + `.env` (API_TOKEN sinh ngẫu nhiên):
+   ```bash
+   wsl -d Ubuntu -u aico -- bash /mnt/d/TVPL/Marshy/qidian-toolkits/qidian-vietphase/deploy/deploy-aico.sh
+   ```
+2. Điền `GOOGLE_CLOUD_PROJECT` trong `/home/aico/vietphase/.env`, chép khoá
+   service-account (role *Vertex AI User*) vào `/home/aico/vietphase/secrets/gcp-sa.json`.
+   Muốn mang dữ liệu cũ sang thì chép vào `/home/aico/vietphase/data/` (input, output,
+   db/state.db...) — đường dẫn bản dịch của máy cũ được tự trỏ lại khi khởi động.
+3. Chạy lại script → build + chạy container `vietphase` (mạng `ai-company_workers`).
+4. Cloudflare Zero Trust → Tunnels → `aico-pc` → Public hostname:
+   `read.aico.io.vn` → `HTTP` `vietphase:9999`.
+5. Mở https://read.aico.io.vn → trang `/login` → nhập `API_TOKEN`. Extension đã đặt
+   sẵn Server URL `https://read.aico.io.vn`; chỉ cần điền API token.
+
+OCR trên PC mặc định dùng Gemini vision (PC không có GPU). PaddleOCR CPU là tuỳ chọn:
+`docker compose -f deploy/compose.aico.yaml --profile ocr up -d`, rồi đặt
+`OCR_SERVICE_URL=http://vietphase-ocr:8000` và `OCR_DEFAULT_ENGINE=paddle` trong `.env`.
+
 ## Deploy bằng Docker (VPS Linux)
 
 Một container chạy uvicorn phục vụ cả API lẫn frontend tĩnh. Dữ liệu nằm ở
