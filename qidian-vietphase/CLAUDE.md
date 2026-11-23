@@ -66,6 +66,8 @@ Copy `.env.example` → `.env`, fill in:
 - `LLM_EFFORT` — `low` (default) … `max`; sent as `output_config.effort`
 - `INPUT_DIR` / `OUTPUT_DIR` / `CONCURRENCY`
 
+- `TRANSLATE_PROVIDER` — `api` (default) or `cli`: translate chapters with the Claude Code CLI (`claude -p` headless, subscription login) via `backend/agent/cli_translator.py`. No tool use there: the model returns `<tieu_de>/<ban_dich>/<tom_tat>/<thuat_ngu>` and the backend calls the same `save_chapter`/`save_summary`/`flag_unknown_term`. CLI failure (not logged in, quota, timeout) → `CliUnavailable` → retried with the API when `CLI_FALLBACK_API=true`. Extractor/reviewer/wiki/OCR always use the API. Settings: `CLI_BIN`, `CLI_MODEL`, `CLI_EFFORT`, `CLI_TIMEOUT`.
+
 Do not name settings with a `CLAUDE_` prefix: Claude Code exports variables such as `CLAUDE_EFFORT`, which pydantic-settings would pick up.
 
 **LLM client:** `backend/shared.py:get_client()` returns one `anthropic.AsyncAnthropic` (SDK retries 408/409/429/5xx, `LLM_RETRY_ATTEMPTS`). Request config is built in `BaseAgent._request_kwargs()`: cached system prompt + top-level `cache_control`, effort, tools from `ToolRegistry.anthropic_tools()` (JSON Schema from Python type hints), and server-side refusal fallback (`fallbacks: "default"`) on models that support it (`base.fallback_kwargs`). Every model call first takes the shared `RateLimiter`.

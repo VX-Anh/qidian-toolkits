@@ -20,7 +20,8 @@ services:
     image: vietphase:latest
     container_name: vietphase
     restart: unless-stopped
-    mem_limit: 768m
+    # Dịch bằng CLI: mỗi chương một tiến trình `claude` (~200 MB) × CONCURRENCY.
+    mem_limit: 1536m
     env_file:
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/.env
     environment:
@@ -45,6 +46,9 @@ services:
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/data:/data
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/rules:/rules
       - ${VIETPHASE_HOME:-/home/aico/vietphase}/secrets/anthropic_api_key:/secrets/anthropic_api_key:ro
+      # Đăng nhập Claude CLI (TRANSLATE_PROVIDER=cli), bền qua rebuild. Đăng nhập một lần:
+      #   docker exec -it -u app vietphase claude auth login
+      - claude-home:/home/app
     networks:
       workers:
         aliases: [vietphase]
@@ -72,6 +76,7 @@ services:
 
 volumes:
   paddlex-models:
+  claude-home:
 
 networks:
   egress:

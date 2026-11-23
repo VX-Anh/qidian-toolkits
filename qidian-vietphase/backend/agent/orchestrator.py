@@ -10,6 +10,7 @@ from .novel_loader import NovelProfile, load_novel
 from .preprocessor import replace_proper_nouns
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
+from .cli_translator import CliTranslatorAgent, CliUnavailable
 from .translator import TranslatorAgent
 from .wiki_agent import WikiAgent
 
@@ -197,18 +198,42 @@ class Orchestrator:
                     if review and review.get("status") == "needs_fix"
                     else None
                 )
-                agent = TranslatorAgent(
-                    filename=filename,
-                    content=content,
-                    novel_slug=self.novel_slug,
-                    profile=profile,
-                    state=self.state,
-                    client=self.client,
-                    output_dir=self.output_dir,
-                    review_issues=review_issues,
-                )
-                async for event in agent.run():
-                    await self.event_queue.put(event.to_dict())
+                use_api = settings.translate_provider != "cli"
+                if not use_api:
+                    cli_agent = CliTranslatorAgent(
+                        filename=filename,
+                        content=content,
+                        novel_slug=self.novel_slug,
+                        profile=profile,
+                        state=self.state,
+                        output_dir=self.output_dir,
+                        review_issues=review_issues,
+                    )
+                    try:
+                        async for event in cli_agent.run():
+                            await self.event_queue.put(event.to_dict())
+                    except CliUnavailable as exc:
+                        if not settings.cli_fallback_api:
+                            raise
+                        # CLI hỏng / hết hạn mức → dịch lại chương này bằng API. "start" mới
+                        # để UI xoá phần chữ CLI đã stream dở.
+                        print(f"[dịch]   ↺ CLI lỗi, chuyển API: {filename} — {exc}", flush=True)
+                        await self._emit("translator", "start", file=filename,
+                                         provider="api", fallback=str(exc)[:300])
+                        use_api = True
+                if use_api:
+                    agent = TranslatorAgent(
+                        filename=filename,
+                        content=content,
+                        novel_slug=self.novel_slug,
+                        profile=profile,
+                        state=self.state,
+                        client=self.client,
+                        output_dir=self.output_dir,
+                        review_issues=review_issues,
+                    )
+                    async for event in agent.run():
+                        await self.event_queue.put(event.to_dict())
 
                 # Agent có thể kết thúc mà không gọi save_chapter (model trả lời
                 # text rồi dừng, hoặc chạm MAX_ITER) → status kẹt 'in_progress'.
