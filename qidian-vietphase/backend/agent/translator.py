@@ -135,7 +135,7 @@ class TranslatorAgent(BaseAgent):
         if self.review_issues:
             user_msg += f"\n\n[LẦN TRƯỚC CÓ VẤN ĐỀ — HÃY SỬA]\n{self.review_issues}"
 
-        await self.rate_limiter.acquire(estimated_tokens=len(self.content) // 2 + 3000)
+        # Rate limit giờ áp cho MỌI lượt gọi model trong BaseAgent.run (limiter dùng chung).
         async for event in super().run(user_msg):
             yield event
 

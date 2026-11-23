@@ -13,13 +13,12 @@ from ..agent.state import EventQueue
 from ..agent import vietphase_import
 from ..config import settings
 from ..safety import check_name, check_request_params, check_slug, safe_child
+from ..jobs import JobRegistry
 from ..shared import get_client, get_state
 
 router = APIRouter(prefix="/api/ocr", tags=["ocr"], dependencies=[Depends(check_request_params)])
 
-_ocr_jobs: dict[str, EventQueue] = {}
-_ocr_tasks: dict[str, asyncio.Task] = {}
-_ocr_meta: dict[str, dict] = {}
+ocr_jobs = JobRegistry()
 
 
 @router.post("/upload")
@@ -33,8 +32,6 @@ async def upload_ocr(
     engine = (engine or settings.ocr_default_engine).lower()
     job_id = str(uuid.uuid4())
     eq = EventQueue()
-    _ocr_jobs[job_id] = eq
-    _ocr_meta[job_id] = {"novel_slug": novel_slug, "chapter_title": chapter_title, "engine": engine}
 
     img_dir = safe_child(settings.ocr_images_dir, novel_slug, job_id)
     img_dir.mkdir(parents=True, exist_ok=True)
@@ -46,10 +43,12 @@ async def upload_ocr(
         paths.append(p)
 
     processor = run_paddle_ocr if engine == "paddle" else run_ocr
+    # Chỉ engine gemini cần client Vertex — paddle không được chết vì thiếu credential.
+    client = get_client() if engine != "paddle" else None
     task = asyncio.create_task(
-        processor(job_id, novel_slug, chapter_title, paths, get_state(), eq, get_client(), settings)
+        processor(job_id, novel_slug, chapter_title, paths, get_state(), eq, client, settings)
     )
-    _ocr_tasks[job_id] = task
+    ocr_jobs.add(job_id, eq, task, novel_slug=novel_slug, chapter_title=chapter_title, engine=engine)
     return {"job_id": job_id, "engine": engine}
 
 
@@ -83,34 +82,31 @@ async def run_ocr_existing(body: OcrRunBody):
         raise HTTPException(400, "Thư mục không có ảnh nào")
 
     engine = (body.engine or settings.ocr_default_engine).lower()
+    if ocr_jobs.running(job=job):
+        raise HTTPException(409, "Chương này đang chạy OCR")
     eq = EventQueue()
-    _ocr_jobs[job] = eq
-    _ocr_meta[job] = {"novel_slug": body.novel_slug, "chapter_title": chapter.get("zh_title", ""), "engine": engine}
 
     processor = run_paddle_ocr if engine == "paddle" else run_ocr
+    client = get_client() if engine != "paddle" else None
     task = asyncio.create_task(
-        processor(job, body.novel_slug, body.filename, paths, state, eq, get_client(), settings,
+        processor(job, body.novel_slug, body.filename, paths, state, eq, client, settings,
                   out_filename=body.filename)
     )
-    _ocr_tasks[job] = task
+    ocr_jobs.add(job, eq, task, job=job, novel_slug=body.novel_slug,
+                 chapter_title=chapter.get("zh_title", ""), engine=engine)
     return {"job_id": job, "engine": engine}
 
 
 @router.get("/jobs")
 def list_ocr_jobs(novel_slug: Optional[str] = Query(None)):
-    result = []
-    for jid, task in _ocr_tasks.items():
-        if not task.done():
-            meta = _ocr_meta.get(jid, {})
-            if novel_slug and meta.get("novel_slug") != novel_slug:
-                continue
-            result.append({"job_id": jid, **meta})
-    return result
+    match = {"novel_slug": novel_slug} if novel_slug else {}
+    return [{"job_id": jid, **{k: v for k, v in ocr_jobs.meta[jid].items() if k != "job"}}
+            for jid in ocr_jobs.running(**match)]
 
 
 @router.get("/stream/{job_id}")
 async def stream_ocr(job_id: str):
-    eq = _ocr_jobs.get(job_id)
+    eq = ocr_jobs.queues.get(job_id)
     if eq is None:
         raise HTTPException(404, "Job không tồn tại")
     return StreamingResponse(

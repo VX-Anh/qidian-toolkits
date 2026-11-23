@@ -8,7 +8,7 @@ from ..config import settings
 from .extractor import ExtractorAgent
 from .novel_loader import NovelProfile, load_novel
 from .preprocessor import replace_proper_nouns
-from .rate_limiter import RateLimiter
+from .rate_limiter import get_rate_limiter
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
 from .translator import TranslatorAgent
@@ -47,7 +47,7 @@ class Orchestrator:
         self.chapter_filenames = chapter_filenames  # None = dịch tất cả
         self.force = force  # True = dịch lại kể cả chương đã DONE
         self.run_wiki = run_wiki  # False = chỉ dịch, bỏ bước đưa vào Story-Wiki
-        self.rate_limiter = RateLimiter(rpm=settings.llm_rpm, tpm=settings.llm_tpm)
+        self.rate_limiter = get_rate_limiter()
 
     async def run(self):
         try:
@@ -91,8 +91,12 @@ class Orchestrator:
                 client=self.client,
                 rules_dir=self.rules_dir,
             )
-            async for event in extractor.run():
-                await self.event_queue.put(event.to_dict())
+            try:
+                async for event in extractor.run():
+                    await self.event_queue.put(event.to_dict())
+            except Exception as exc:
+                # Lỗi extractor (vd 429 hết retry) không được bỏ luôn wiki + review.
+                await self._emit("extractor", "error", error=str(exc))
 
             # Extractor vừa có thể append term mới vào novel.md → nạp lại profile
             # để WikiAgent/Reviewer thấy glossary mới nhất.
@@ -149,8 +153,12 @@ class Orchestrator:
                         state=self.state,
                         client=self.client,
                     )
-                    async for event in reviewer.run():
-                        await self.event_queue.put(event.to_dict())
+                    try:
+                        async for event in reviewer.run():
+                            await self.event_queue.put(event.to_dict())
+                    except Exception as exc:
+                        await self._emit("reviewer", "error",
+                                         file=chapter["filename"], error=str(exc))
 
                 reviews = self.state.get_reviews(self.novel_slug)
                 await self._emit("orchestrator", "review_summary", reviews=reviews)
@@ -226,6 +234,17 @@ class Orchestrator:
                 else:
                     print(f"[dịch]   ✗ thất bại: {filename}", flush=True)
 
+            except asyncio.CancelledError:
+                # CancelledError là BaseException → `except Exception` không bắt; trước
+                # đây chương kẹt 'in_progress' tới khi restart server.
+                prev = self.state.get_chapter(filename) or {}
+                await self.state.set_status(
+                    filename,
+                    ChapterStatus.DONE if prev.get("translated_path") and not self.force
+                    else ChapterStatus.PENDING,
+                )
+                print(f"[dịch]   ⏹ huỷ: {filename}", flush=True)
+                raise
             except Exception as exc:
                 await self.state.set_status(filename, ChapterStatus.FAILED, error=str(exc))
                 await self._emit("translator", "error", file=filename, error=str(exc))

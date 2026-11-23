@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # Rate limit (token-bucket nội bộ; hạ xuống nếu quota Vertex thấp)
     llm_rpm: int = 500
     llm_tpm: int = 150_000
+    # Số lần thử (kể cả lần đầu) khi gặp 408/429/5xx/timeout, backoff mũ 2s→60s.
+    llm_retry_attempts: int = 6
 
     # Default tương đối theo cwd chạy uvicorn (qidian-vietphase/); .env đè lại nếu cần.
     input_dir: Path = Path(r"..\data\input")

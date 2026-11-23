@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from google import genai
+from google.genai import types
 
 from .agent.state import SharedState
 from .config import settings
@@ -47,5 +48,15 @@ def get_client() -> genai.Client:
             project=settings.gcp_project_id,
             location=settings.gcp_location,
             credentials=credentials,
+            # SDK mặc định KHÔNG retry. Bật retry có backoff mũ + jitter cho
+            # 408/429/5xx và lỗi timeout/kết nối — 429 thoáng qua không còn làm
+            # chương bị FAILED ngay.
+            http_options=types.HttpOptions(
+                retry_options=types.HttpRetryOptions(
+                    attempts=settings.llm_retry_attempts,
+                    initial_delay=2.0,
+                    max_delay=60.0,
+                ),
+            ),
         )
     return _client

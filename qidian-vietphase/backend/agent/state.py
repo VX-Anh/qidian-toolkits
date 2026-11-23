@@ -455,25 +455,71 @@ class SharedState:
 
 
 class EventQueue:
-    """Bridge giữa agent events và SSE endpoint."""
+    """Bridge giữa agent events và SSE endpoint.
+
+    Broadcast: mỗi lần mở stream (tab khác, EventSource reconnect, extension + app
+    cùng theo dõi) là một subscriber riêng, nhận lại lịch sử sự kiện rồi tiếp tục
+    nhận sự kiện mới. Trước đây chỉ có một asyncio.Queue: hai người đọc chia nhau
+    sự kiện, người còn lại treo mãi; mở lại sau khi job xong cũng treo.
+
+    Sự kiện token (stream từng chữ) chỉ phát trực tiếp, không lưu vào lịch sử —
+    để bộ nhớ không phình theo độ dài bản dịch khi không ai đang xem.
+    """
+
+    HISTORY_MAX = 2000
 
     def __init__(self):
-        self._q: asyncio.Queue = asyncio.Queue()
-        self._done = False
+        self._history: list[dict] = []
+        self._subs: set[asyncio.Queue] = set()
+        self._closed = False
+
+    @staticmethod
+    def _is_token(event: dict) -> bool:
+        return str(event.get("type", "")).endswith("token")
 
     async def put(self, event: dict):
-        await self._q.put(event)
+        if self._closed:
+            return
+        if not self._is_token(event):
+            self._history.append(event)
+            if len(self._history) > self.HISTORY_MAX:
+                del self._history[: len(self._history) - self.HISTORY_MAX]
+        for q in list(self._subs):
+            q.put_nowait(event)
+
+    def close_nowait(self):
+        if self._closed:
+            return
+        self._closed = True
+        for q in list(self._subs):
+            q.put_nowait(None)
 
     async def close(self):
-        await self._q.put(None)
+        self.close_nowait()
 
     async def cancel(self):
-        await self._q.put({"agent": "orchestrator", "type": "cancelled"})
-        await self._q.put(None)
+        await self.put({"agent": "orchestrator", "type": "cancelled"})
+        await self.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
 
     async def stream(self):
-        while True:
-            event = await self._q.get()
-            if event is None:
-                break
-            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        q: asyncio.Queue = asyncio.Queue()
+        # Đăng ký trước khi chụp lịch sử → không lọt sự kiện ở giữa (event loop
+        # đơn luồng, không có await giữa hai bước).
+        self._subs.add(q)
+        backlog = list(self._history)
+        try:
+            for event in backlog:
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if self._closed:
+                return
+            while True:
+                event = await q.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            self._subs.discard(q)

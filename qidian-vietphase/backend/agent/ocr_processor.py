@@ -54,6 +54,8 @@ async def run_ocr(
         ]
 
         text_chunks: list[str] = []
+        from .rate_limiter import get_rate_limiter
+        await get_rate_limiter().acquire(len(image_paths) * 1500 + 2000)
         stream = await client.aio.models.generate_content_stream(
             model=settings.llm_vision_model,
             contents=[types.Content(role="user", parts=parts)],

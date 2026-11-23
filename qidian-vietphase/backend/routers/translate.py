@@ -9,12 +9,19 @@ from ..agent.orchestrator import Orchestrator
 from ..agent.state import ChapterStatus, EventQueue
 from ..config import settings
 from ..safety import check_name, check_request_params, check_slug
+from ..jobs import JobRegistry
 from ..shared import get_client, get_state
 
 router = APIRouter(prefix="/api/translate", tags=["translate"], dependencies=[Depends(check_request_params)])
 
-_jobs: dict[str, EventQueue] = {}
-_tasks: dict[str, asyncio.Task] = {}
+jobs = JobRegistry()
+
+
+def _ensure_idle(slug: str) -> None:
+    """Một truyện chỉ chạy một job dịch/extractor tại một thời điểm — hai job cùng
+    ghi novel.md và trạng thái chương sẽ dẫm lên nhau."""
+    if jobs.running(novel_slug=slug, kind="translate"):
+        raise HTTPException(409, "Truyện này đang có job dịch/trích thuật ngữ chạy — đợi xong hoặc huỷ trước")
 
 
 class TranslateRequest(BaseModel):
@@ -27,11 +34,11 @@ class TranslateRequest(BaseModel):
 @router.post("/start")
 async def start_translation(req: TranslateRequest):
     check_slug(req.novel_slug)
+    _ensure_idle(req.novel_slug)
     for fn in req.chapter_filenames or []:
         check_name(fn)
     job_id = str(uuid.uuid4())
     eq = EventQueue()
-    _jobs[job_id] = eq
 
     orch = Orchestrator(
         novel_slug=req.novel_slug,
@@ -47,7 +54,7 @@ async def start_translation(req: TranslateRequest):
     )
 
     task = asyncio.create_task(orch.run())
-    _tasks[job_id] = task
+    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="translate")
     return {"job_id": job_id}
 
 
@@ -82,7 +89,6 @@ async def wiki_ingest(req: WikiIngestRequest):
 
     job_id = str(uuid.uuid4())
     eq = EventQueue()
-    _jobs[job_id] = eq
 
     async def run_wiki():
         try:
@@ -109,13 +115,13 @@ async def wiki_ingest(req: WikiIngestRequest):
             await eq.close()
 
     task = asyncio.create_task(run_wiki())
-    _tasks[job_id] = task
+    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="wiki")
     return {"job_id": job_id, "count": len(targets)}
 
 
 @router.get("/stream/{job_id}")
 async def stream_events(job_id: str):
-    eq = _jobs.get(job_id)
+    eq = jobs.queues.get(job_id)
     if eq is None:
         raise HTTPException(404, "Job không tồn tại")
 
@@ -131,14 +137,14 @@ async def stream_events(job_id: str):
 
 @router.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str):
-    eq = _jobs.pop(job_id, None)
-    task = _tasks.pop(job_id, None)
+    eq = jobs.queues.get(job_id)
+    task = jobs.tasks.get(job_id)
+
+    if task and not task.done():
+        task.cancel()   # Orchestrator bắt CancelledError → trả chương đang dịch về pending
 
     if eq:
         await eq.cancel()
-
-    if task and not task.done():
-        task.cancel()
 
     return {"ok": True}
 
@@ -151,6 +157,7 @@ class RetranslateRequest(BaseModel):
 @router.post("/retranslate")
 async def retranslate_needs_fix(req: RetranslateRequest):
     check_slug(req.novel_slug)
+    _ensure_idle(req.novel_slug)
     for fn in req.chapter_filenames or []:
         check_name(fn)
     state = get_state()
@@ -167,7 +174,6 @@ async def retranslate_needs_fix(req: RetranslateRequest):
 
     job_id = str(uuid.uuid4())
     eq = EventQueue()
-    _jobs[job_id] = eq
 
     orch = Orchestrator(
         novel_slug=req.novel_slug,
@@ -180,7 +186,7 @@ async def retranslate_needs_fix(req: RetranslateRequest):
         chapter_filenames=needs_fix,
     )
     task = asyncio.create_task(orch.run())
-    _tasks[job_id] = task
+    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="translate")
     return {"job_id": job_id, "count": len(needs_fix)}
 
 
@@ -191,11 +197,11 @@ class ExtractRequest(BaseModel):
 @router.post("/extract")
 async def extract_terms(req: ExtractRequest):
     check_slug(req.novel_slug)
+    _ensure_idle(req.novel_slug)
     from ..agent.extractor import ExtractorAgent
 
     job_id = str(uuid.uuid4())
     eq = EventQueue()
-    _jobs[job_id] = eq
 
     async def run_extractor():
         agent = ExtractorAgent(
@@ -204,10 +210,15 @@ async def extract_terms(req: ExtractRequest):
             client=get_client(),
             rules_dir=settings.rules_dir,
         )
-        async for event in agent.run():
-            await eq.put(event.to_dict())
-        await eq.close()
+        try:
+            async for event in agent.run():
+                await eq.put(event.to_dict())
+            await eq.put({"agent": "orchestrator", "type": "done", "novel": req.novel_slug})
+        except Exception as exc:
+            await eq.put({"agent": "orchestrator", "type": "error", "msg": f"Lỗi trích thuật ngữ: {exc}"})
+        finally:
+            await eq.close()
 
     task = asyncio.create_task(run_extractor())
-    _tasks[job_id] = task
+    jobs.add(job_id, eq, task, novel_slug=req.novel_slug, kind="translate")
     return {"job_id": job_id}

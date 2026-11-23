@@ -3,7 +3,7 @@ import time
 
 
 class RateLimiter:
-    """Token bucket cho OpenAI API — giới hạn RPM và TPM."""
+    """Token bucket cho Gemini (Vertex) — giới hạn RPM và TPM, dùng chung toàn app."""
 
     def __init__(self, rpm: int = 500, tpm: int = 150_000):
         self._rpm = rpm
@@ -42,3 +42,32 @@ class RateLimiter:
 
             self._token_used += estimated_tokens
             self._request_times.append(now)
+
+
+_shared: "RateLimiter | None" = None
+
+
+def get_rate_limiter() -> RateLimiter:
+    """Một limiter cho mọi agent/job — trước đây mỗi Orchestrator tạo riêng và chỉ
+    translator gọi acquire một lần, nên các job song song + reviewer/wiki/extractor
+    không bị giới hạn chung."""
+    global _shared
+    if _shared is None:
+        from ..config import settings
+        _shared = RateLimiter(rpm=settings.llm_rpm, tpm=settings.llm_tpm)
+    return _shared
+
+
+def estimate_tokens(contents) -> int:
+    """Ước lượng thô số token input từ list types.Content (chữ Hán ~1 token/ký tự,
+    tiếng Việt ~1 token/3-4 ký tự → lấy chung len//2)."""
+    n = 0
+    for c in contents or []:
+        for p in getattr(c, "parts", None) or []:
+            t = getattr(p, "text", None)
+            if t:
+                n += len(t)
+            fc = getattr(p, "function_call", None)
+            if fc is not None and getattr(fc, "args", None):
+                n += len(str(fc.args))
+    return n // 2 + 1000

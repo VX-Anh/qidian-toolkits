@@ -6,6 +6,7 @@ from google import genai
 from google.genai import types
 
 from ..config import settings
+from .rate_limiter import estimate_tokens, get_rate_limiter
 from .tools import ToolRegistry
 
 
@@ -94,6 +95,7 @@ class BaseAgent:
         for iteration in range(self.MAX_ITER):
             yield self._emit("thinking", iteration=iteration)
 
+            await get_rate_limiter().acquire(estimate_tokens(self.history))
             stream = await self.client.aio.models.generate_content_stream(
                 model=self.model,
                 contents=self.history,
