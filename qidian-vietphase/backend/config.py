@@ -47,6 +47,17 @@ class Settings(BaseSettings):
 
     concurrency: int = 3
 
+    # ── Bảo mật ──────────────────────────────────────────────────────────
+    # Token bảo vệ toàn bộ /api/*. Rỗng = tắt auth (chỉ nên dùng khi chạy local).
+    # Bắt buộc đặt khi deploy ra Internet (docker-compose sẽ báo lỗi nếu thiếu).
+    api_token: str = ""
+    # Origin được phép gọi API từ trình duyệt khác origin, phân tách bằng dấu phẩy.
+    # Rỗng = không bật CORS (frontend cùng origin, extension có host_permissions
+    # nên không cần CORS).
+    cors_origins: str = ""
+    # Bật FastAPI debug (traceback trong response) + endpoint /_dev/ping cho auto-reload.
+    dev_mode: bool = False
+
     # ── OCR ──────────────────────────────────────────────────────────────
     # "paddle" = PaddleOCR offline (mặc định), "gemini" = Gemini vision
     ocr_default_engine: str = "paddle"

@@ -1,13 +1,14 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..agent.novel_loader import list_novels, load_novel
 from ..agent import vietphase_import
 from ..config import settings
+from ..safety import check_request_params, check_slug, safe_child
 
-router = APIRouter(prefix="/api/novels", tags=["novels"])
+router = APIRouter(prefix="/api/novels", tags=["novels"], dependencies=[Depends(check_request_params)])
 
 
 @router.get("")
@@ -67,7 +68,8 @@ class CreateNovelBody(BaseModel):
 
 @router.post("")
 def create_novel(body: CreateNovelBody):
-    novel_dir = settings.rules_dir / body.slug
+    check_slug(body.slug)
+    novel_dir = safe_child(settings.rules_dir, body.slug)
     if novel_dir.exists():
         raise HTTPException(400, "Slug đã tồn tại")
 

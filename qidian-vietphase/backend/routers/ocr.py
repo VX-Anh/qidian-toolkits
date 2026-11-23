@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -12,9 +12,10 @@ from ..agent.ocr_processor import run_ocr, run_paddle_ocr
 from ..agent.state import EventQueue
 from ..agent import vietphase_import
 from ..config import settings
+from ..safety import check_name, check_request_params, check_slug, safe_child
 from ..shared import get_client, get_state
 
-router = APIRouter(prefix="/api/ocr", tags=["ocr"])
+router = APIRouter(prefix="/api/ocr", tags=["ocr"], dependencies=[Depends(check_request_params)])
 
 _ocr_jobs: dict[str, EventQueue] = {}
 _ocr_tasks: dict[str, asyncio.Task] = {}
@@ -28,13 +29,14 @@ async def upload_ocr(
     engine: str = Form(""),
     images: List[UploadFile] = File(...),
 ):
+    check_slug(novel_slug)
     engine = (engine or settings.ocr_default_engine).lower()
     job_id = str(uuid.uuid4())
     eq = EventQueue()
     _ocr_jobs[job_id] = eq
     _ocr_meta[job_id] = {"novel_slug": novel_slug, "chapter_title": chapter_title, "engine": engine}
 
-    img_dir = settings.ocr_images_dir / novel_slug / job_id
+    img_dir = safe_child(settings.ocr_images_dir, novel_slug, job_id)
     img_dir.mkdir(parents=True, exist_ok=True)
 
     paths = []
@@ -60,6 +62,8 @@ class OcrRunBody(BaseModel):
 @router.post("/run")
 async def run_ocr_existing(body: OcrRunBody):
     """Chạy OCR trên ảnh CÓ SẴN của một chương (chương import từ folder, chưa có text)."""
+    check_slug(body.novel_slug)
+    check_name(body.filename)
     state = get_state()
     chapter = state.get_chapter(body.filename)
     if not chapter:
@@ -136,7 +140,7 @@ def list_job_images(novel_slug: str, job_id: str):
 @router.get("/{novel_slug}/{job_id}/images/{filename}")
 def get_job_image(novel_slug: str, job_id: str, filename: str):
     img_dir = vietphase_import.resolve_image_dir(settings, novel_slug, job_id)
-    img_path = (img_dir / filename) if img_dir else None
+    img_path = safe_child(img_dir, filename) if img_dir else None
     if not img_path or not img_path.exists():
         raise HTTPException(404, "Ảnh không tồn tại")
     return FileResponse(str(img_path), media_type=_MEDIA.get(img_path.suffix.lower(), "image/jpeg"))

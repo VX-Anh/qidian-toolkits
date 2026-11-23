@@ -37,12 +37,15 @@
   <script type="text/babel" data-presets="react" src="/static/src/app.jsx"></script>
 
   <script>
-    // Dev auto-reload: browser tự refresh khi uvicorn restart sau khi save code
+    // Dev auto-reload: browser tự refresh khi uvicorn restart sau khi save code.
+    // Chỉ chạy ở localhost và khi server bật DEV_MODE (có /_dev/ping); nếu không thì tự tắt.
     (function () {
+      if (!["localhost", "127.0.0.1"].includes(location.hostname)) return;
       let down = false;
-      setInterval(async () => {
+      const t = setInterval(async () => {
         try {
-          await fetch("/_dev/ping", { cache: "no-store" });
+          const r = await fetch("/_dev/ping", { cache: "no-store" });
+          if (r.status === 404) { clearInterval(t); return; }
           if (down) location.reload();
         } catch { down = true; }
       }, 800);

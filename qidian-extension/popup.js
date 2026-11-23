@@ -10,6 +10,7 @@ const charCountEl    = document.getElementById('charCount');
 const warningEl      = document.getElementById('warning');
 const novelSlugInput = document.getElementById('novelSlug');
 const serverUrlInput = document.getElementById('serverUrl');
+const apiTokenInput  = document.getElementById('apiToken');
 
 // ── Capture tuning ────────────────────────────────────────────────────────────
 const FALLBACK_CROP_X = 600;
@@ -136,18 +137,47 @@ function scrollAndReport(y) {
 }
 
 // ── Restore novel slug + server URL ───────────────────────────────────────────
-chrome.storage.local.get(['novel_slug', 'server_url'], (s) => {
+chrome.storage.local.get(['novel_slug', 'server_url', 'api_token'], (s) => {
   if (s.novel_slug) novelSlugInput.value = s.novel_slug;
   serverUrlInput.value = s.server_url || DEFAULT_SERVER;
+  apiTokenInput.value = s.api_token || '';
 });
 novelSlugInput.addEventListener('input', () =>
   chrome.storage.local.set({ novel_slug: novelSlugInput.value.trim() }));
 serverUrlInput.addEventListener('input', () =>
   chrome.storage.local.set({ server_url: serverUrlInput.value.trim() }));
+apiTokenInput.addEventListener('input', () =>
+  chrome.storage.local.set({ api_token: apiTokenInput.value.trim() }));
 
 // Bỏ dấu "/" cuối để khi nối path không sinh "//". Rỗng → mặc định localhost.
 function getServerUrl() {
   return (serverUrlInput.value.trim() || DEFAULT_SERVER).replace(/\/+$/, '');
+}
+
+// Header xác thực cho server bật API_TOKEN (rỗng = server chạy local không auth).
+function authHeaders() {
+  const t = apiTokenInput.value.trim();
+  return t ? { 'X-API-Token': t } : {};
+}
+
+// EventSource không gắn được header → truyền token qua query.
+function withToken(url) {
+  const t = apiTokenInput.value.trim();
+  return t ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(t)}` : url;
+}
+
+// Manifest chỉ cấp sẵn quyền cho qidian + localhost. Server khác → xin quyền
+// cho đúng origin đó (optional_host_permissions). Gọi ngay đầu click handler để
+// còn trong user gesture.
+async function ensureServerPermission() {
+  let origin;
+  try { origin = new URL(getServerUrl()).origin; }
+  catch (_) { setStatus('Server URL không hợp lệ.'); return false; }
+  const origins = [`${origin}/*`];
+  if (await chrome.permissions.contains({ origins })) return true;
+  const ok = await chrome.permissions.request({ origins });
+  if (!ok) setStatus(`Chưa cấp quyền truy cập ${origin} — không gửi được.`);
+  return ok;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -418,7 +448,7 @@ btnCapture.addEventListener('click', async () => {
 // OCR (PaddleOCR mặc định) rồi phát tiến trình qua SSE /api/ocr/stream/{job_id}.
 function streamOcr(server, jobId) {
   return new Promise((resolve) => {
-    const es = new EventSource(`${server}/api/ocr/stream/${jobId}`);
+    const es = new EventSource(withToken(`${server}/api/ocr/stream/${jobId}`));
     let tokenText = '';
     es.onmessage = (ev) => {
       let msg;
@@ -456,6 +486,7 @@ function streamOcr(server, jobId) {
 }
 
 btnSendImages.addEventListener('click', async () => {
+  if (!(await ensureServerPermission())) return;
   const tab = await getActiveTab();
   if (!tab.url?.includes('qidian.com/chapter/')) {
     setStatus('Hãy mở một trang chapter trên qidian.com.');
@@ -492,7 +523,8 @@ btnSendImages.addEventListener('click', async () => {
 
     const server = getServerUrl();
     setStatus(`Đang gửi ${screenshots.length} ảnh lên ${server} để OCR...`);
-    const resp = await fetch(`${server}/api/ocr/upload`, { method: 'POST', body: form });
+    const resp = await fetch(`${server}/api/ocr/upload`, { method: 'POST', body: form, headers: authHeaders() });
+    if (resp.status === 401) throw new Error("server từ chối (401) — kiểm tra API token");
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
     const ctype = resp.headers.get('content-type') || '';
     if (!ctype.includes('application/json')) {
@@ -843,6 +875,7 @@ btnCopyTxt.addEventListener('click', async () => {
 // multipart lên backend. Backend tự ghi vào input_dir + đăng ký DB; tên file
 // (kèm số chương) được suy từ field name của UploadFile nên phải đặt đúng .txt.
 btnSendServer.addEventListener('click', async () => {
+  if (!(await ensureServerPermission())) return;
   const tab = await getActiveTab();
   if (!tab.url?.includes('qidian.com/chapter/')) {
     setStatus('Hãy mở một trang chapter trên qidian.com.');
@@ -879,7 +912,8 @@ btnSendServer.addEventListener('click', async () => {
 
     const server = getServerUrl();
     setStatus(`Đang gửi lên ${server}...`);
-    const resp = await fetch(`${server}/api/chapters/upload`, { method: 'POST', body: form });
+    const resp = await fetch(`${server}/api/chapters/upload`, { method: 'POST', body: form, headers: authHeaders() });
+    if (resp.status === 401) throw new Error("server từ chối (401) — kiểm tra API token");
     if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
     // Xác minh là JSON trước khi parse — nếu URL trỏ nhầm (vd vào một trang HTML
     // bất kỳ trả 200) thì báo lỗi rõ ràng thay vì "Unexpected token <".

@@ -7,6 +7,8 @@ services:
 
     # Phơi trực tiếp ra ngoài: truy cập http://IP:9166 (không reverse proxy).
     # Định dạng "host:container" — host 9166 → container 9999 (uvicorn).
+    # /api/* được bảo vệ bằng API_TOKEN (bắt buộc, xem environment bên dưới).
+    # Đứng sau reverse proxy thì đổi thành "127.0.0.1:9166:9999" để không lộ port.
     ports:
       - "9166:9999"
 
@@ -22,6 +24,9 @@ services:
       VIETPHASE_DIR: /data/vietphase
       DB_PATH: /data/db/state.db
       RULES_DIR: rules
+      # Bắt buộc: compose dừng với lỗi nếu .env chưa có API_TOKEN.
+      API_TOKEN: ${API_TOKEN:?Đặt API_TOKEN trong .env trước khi deploy}
+      DEV_MODE: "false"
       # OCR offline PaddleOCR chạy ở sidecar service "ocr" bên dưới (share volume /data).
       # Mặc định dùng paddle (miễn phí); vẫn chọn được gemini theo từng request.
       OCR_DEFAULT_ENGINE: paddle

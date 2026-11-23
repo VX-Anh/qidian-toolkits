@@ -10,6 +10,7 @@ hàm thuần trong run_ocr.py (import, không copy) để logic OCR/dedup không
 Env:
   PADDLE_TIER   = medium (mặc định) | small     → chọn tier PP-OCRv6
   PADDLE_DEVICE = gpu (mặc định)    | cpu        → device suy luận
+  OCR_DATA_ROOT = /data (mặc định)               → img_dir/output_path phải nằm trong đây
 """
 import os
 import asyncio
@@ -30,6 +31,15 @@ from run_ocr import IMAGE_EXTS, model_names, preprocess, extract_lines, find_hea
 # tier medium = chính xác nhất; small nhẹ hơn. Backend luôn muốn bản tốt nhất.
 _TIER_SERVER = os.environ.get("PADDLE_TIER", "medium").lower() != "small"
 _DEVICE = os.environ.get("PADDLE_DEVICE", "gpu").lower()  # "gpu" | "cpu"
+# Chỉ đọc ảnh / ghi output trong thư mục dữ liệu dùng chung, không cho đường dẫn tuỳ ý.
+_DATA_ROOT = Path(os.environ.get("OCR_DATA_ROOT", "/data")).resolve()
+
+
+def _inside_data(raw: str, field: str) -> Path:
+    p = Path(raw).resolve()
+    if p != _DATA_ROOT and not p.is_relative_to(_DATA_ROOT):
+        raise HTTPException(400, f"{field} phải nằm trong {_DATA_ROOT}")
+    return p
 
 _ocr = None
 # Một instance PaddleOCR KHÔNG reentrant (chia sẻ buffer nội bộ) → serialize predict.
@@ -124,7 +134,8 @@ def _run_dir(img_dir: Path, scale: float) -> list[str]:
 
 @app.post("/ocr")
 async def ocr(req: OcrReq):
-    d = Path(req.img_dir)
+    d = _inside_data(req.img_dir, "img_dir")
+    out = _inside_data(req.output_path, "output_path") if req.output_path else None
     if not d.is_dir():
         raise HTTPException(400, f"img_dir không tồn tại: {req.img_dir}")
 
@@ -133,7 +144,7 @@ async def ocr(req: OcrReq):
         lines = await anyio.to_thread.run_sync(_run_dir, d, req.scale)
 
     text = "\n".join(lines)
-    if req.output_path:
-        Path(req.output_path).write_text(text, encoding="utf-8")
+    if out:
+        out.write_text(text, encoding="utf-8")
     pages = len([p for p in d.iterdir() if p.suffix.lower() in IMAGE_EXTS])
     return {"text": text, "char_count": len(text), "lines": len(lines), "pages": pages}

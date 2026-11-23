@@ -3,11 +3,12 @@
 Đọc tầng làm giàu/ngữ cảnh trong SQLite: thực thể, quan hệ, sự kiện.
 Mọi endpoint nhận `?up_to=N` (spoiler-free) — chỉ trả mục có first_chapter/chapter_num ≤ N.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 
+from ..safety import check_request_params
 from ..shared import get_state
 
-router = APIRouter(prefix="/api/wiki", tags=["wiki"])
+router = APIRouter(prefix="/api/wiki", tags=["wiki"], dependencies=[Depends(check_request_params)])
 
 
 @router.get("/{slug}/entities")

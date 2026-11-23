@@ -2,16 +2,17 @@ import unicodedata
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi import Depends, APIRouter, Body, File, Form, HTTPException, UploadFile
 
 from ..agent.novel_loader import load_novel
 from ..agent.orchestrator import parse_chapter_filename
 from ..agent.preprocessor import build_segments
 from ..agent import vietphase_import
 from ..config import settings
+from ..safety import check_name, check_request_params, check_slug, safe_child
 from ..shared import get_state
 
-router = APIRouter(prefix="/api/chapters", tags=["chapters"])
+router = APIRouter(prefix="/api/chapters", tags=["chapters"], dependencies=[Depends(check_request_params)])
 
 
 @router.post("/import")
@@ -90,6 +91,7 @@ async def upload_chapters(
     novel_slug: str = Form(...),
     files: List[UploadFile] = File(...),
 ):
+    check_slug(novel_slug)
     state = get_state()
     settings.input_dir.mkdir(parents=True, exist_ok=True)
     saved, errors = [], []
@@ -99,6 +101,11 @@ async def upload_chapters(
         if not name:
             errors.append(f"{f.filename!r}: tên file không hợp lệ (lỗi mã hóa)")
             continue
+        try:
+            check_name(name)
+        except HTTPException:
+            errors.append(f"{name!r}: tên file không hợp lệ")
+            continue
         if not name.endswith(".txt"):
             errors.append(f"{name}: chỉ chấp nhận .txt")
             continue
@@ -107,7 +114,7 @@ async def upload_chapters(
         # file để một file lỗi không bỏ dở transaction trên connection dùng chung
         # (transaction treo sẽ làm cả app thấy dòng chưa-commit, sinh tên không khớp).
         try:
-            dest = settings.input_dir / name
+            dest = safe_child(settings.input_dir, name)
             dest.write_bytes(await f.read())
             num, zh_title = parse_chapter_filename(name)
             with state._tlock:
@@ -132,7 +139,7 @@ async def upload_chapters(
 
 @router.get("/{filename}/pretranslate")
 def get_pretranslate(filename: str, novel_slug: str):
-    path = settings.input_dir / filename
+    path = safe_child(settings.input_dir, filename)
     if not path.exists():
         raise HTTPException(404, "File gốc không tồn tại")
     try:
@@ -146,7 +153,7 @@ def get_pretranslate(filename: str, novel_slug: str):
 
 @router.get("/{filename}/source")
 def get_source(filename: str):
-    path = settings.input_dir / filename
+    path = safe_child(settings.input_dir, filename)
     if not path.exists():
         raise HTTPException(404, "File gốc không tồn tại")
     return {"filename": filename, "content": path.read_text(encoding="utf-8")}
@@ -159,7 +166,7 @@ def save_source(filename: str, content: str = Body(..., embed=True)):
     Dùng chung cho cả chương text và chương ảnh/OCR (kết quả OCR cũng được ghi
     vào input_dir/{filename}). Ghi UTF-8; pretranslate sẽ tự build lại lần sau.
     """
-    path = settings.input_dir / filename
+    path = safe_child(settings.input_dir, filename)
     if not path.exists():
         raise HTTPException(404, "File gốc không tồn tại")
     path.write_text(content, encoding="utf-8")

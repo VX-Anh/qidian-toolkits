@@ -1,16 +1,17 @@
 import asyncio
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import Depends, APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..agent.orchestrator import Orchestrator
 from ..agent.state import ChapterStatus, EventQueue
 from ..config import settings
+from ..safety import check_name, check_request_params, check_slug
 from ..shared import get_client, get_state
 
-router = APIRouter(prefix="/api/translate", tags=["translate"])
+router = APIRouter(prefix="/api/translate", tags=["translate"], dependencies=[Depends(check_request_params)])
 
 _jobs: dict[str, EventQueue] = {}
 _tasks: dict[str, asyncio.Task] = {}
@@ -25,6 +26,9 @@ class TranslateRequest(BaseModel):
 
 @router.post("/start")
 async def start_translation(req: TranslateRequest):
+    check_slug(req.novel_slug)
+    for fn in req.chapter_filenames or []:
+        check_name(fn)
     job_id = str(uuid.uuid4())
     eq = EventQueue()
     _jobs[job_id] = eq
@@ -59,6 +63,9 @@ async def wiki_ingest(req: WikiIngestRequest):
     Stream qua chung `/api/translate/stream/{job_id}` — phát các event của
     WikiAgent rồi kết thúc bằng `wiki_done`.
     """
+    check_slug(req.novel_slug)
+    for fn in req.chapter_filenames or []:
+        check_name(fn)
     from ..agent.novel_loader import load_novel
     from ..agent.wiki_agent import WikiAgent
 
@@ -143,6 +150,9 @@ class RetranslateRequest(BaseModel):
 
 @router.post("/retranslate")
 async def retranslate_needs_fix(req: RetranslateRequest):
+    check_slug(req.novel_slug)
+    for fn in req.chapter_filenames or []:
+        check_name(fn)
     state = get_state()
     if req.chapter_filenames:
         needs_fix = req.chapter_filenames
@@ -180,6 +190,7 @@ class ExtractRequest(BaseModel):
 
 @router.post("/extract")
 async def extract_terms(req: ExtractRequest):
+    check_slug(req.novel_slug)
     from ..agent.extractor import ExtractorAgent
 
     job_id = str(uuid.uuid4())
