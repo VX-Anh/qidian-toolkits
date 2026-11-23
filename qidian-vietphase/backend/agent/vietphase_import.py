@@ -67,6 +67,13 @@ def scan(state, settings, novel_slug: str | None = None) -> list[str]:
     conn = state._conn
     imported: list[str] = []
 
+    with state._tlock:
+        _scan_locked(conn, settings, slug_dirs, imported)
+        conn.commit()
+    return imported
+
+
+def _scan_locked(conn, settings, slug_dirs, imported: list[str]) -> None:
     for ndir in slug_dirs:
         slug = ndir.name
         for chdir in sorted(ndir.iterdir(), key=lambda p: p.name):
@@ -83,6 +90,16 @@ def scan(state, settings, novel_slug: str | None = None) -> list[str]:
             base_name = raw_txt.name if raw_txt else (images[0].name if images else None)
             filename = derive_filename(base_name or chdir.name, chdir.name)
             num, zh_title = parse_chapter_filename(filename)
+
+            # filename là khoá toàn cục: nếu đã thuộc truyện khác thì bỏ qua, không
+            # để chương của truyện này dùng nhầm file nguồn của truyện kia.
+            row = conn.execute(
+                "SELECT novel_slug FROM chapters WHERE filename=?", [filename]
+            ).fetchone()
+            if row and row[0] not in (slug, "unknown", None):
+                print(f"[import] bỏ qua {slug}/{chdir.name}: '{filename}' đã thuộc truyện "
+                      f"'{row[0]}' (trùng tên chương)", flush=True)
+                continue
 
             # Nguồn dịch: ưu tiên text extension (copy trực tiếp), fallback output.txt (OCR).
             # Copy vào input_dir nếu chưa có — không ghi đè bản đã sửa tay.
@@ -106,9 +123,6 @@ def scan(state, settings, novel_slug: str | None = None) -> list[str]:
                 [filename, slug, num, zh_title, ocr_job_id],
             )
             imported.append(filename)
-
-    conn.commit()
-    return imported
 
 
 def _humanize_slug(slug: str) -> str:

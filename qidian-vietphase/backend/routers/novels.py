@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import Depends, APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..agent.novel_loader import list_novels, load_novel
+from ..agent.novel_loader import NOVEL_MD_LOCK, list_novels, load_novel, write_novel_md
 from ..agent import vietphase_import
 from ..config import settings
 from ..safety import check_request_params, check_slug, safe_child
@@ -55,7 +55,8 @@ def update_novel_raw(slug: str, body: NovelRawBody):
     path = settings.rules_dir / slug / "novel.md"
     if not path.exists():
         raise HTTPException(404)
-    path.write_text(body.content, encoding="utf-8")
+    with NOVEL_MD_LOCK:
+        write_novel_md(path, body.content)
     return {"ok": True}
 
 

@@ -232,8 +232,13 @@ class Orchestrator:
                 print(f"[dịch]   ✗ lỗi: {filename} — {exc}", flush=True)
 
     def _collect_files(self) -> list[Path]:
+        # input_dir là thư mục phẳng dùng chung cho mọi truyện → chỉ lấy file đã
+        # đăng ký cho truyện này, hoặc file chưa thuộc truyện nào. Trước đây glob
+        # hết *.txt nên chương của truyện khác bị dịch bằng glossary của truyện này.
+        owner = {c["filename"]: c["novel_slug"] for c in self.state.get_chapters()}
         all_files = sorted(
-            self.input_dir.glob("*.txt"),
+            (p for p in self.input_dir.glob("*.txt")
+             if owner.get(p.name) in (None, "unknown", self.novel_slug)),
             key=lambda p: parse_chapter_filename(p.name)[0],
         )
         if self.chapter_filenames:

@@ -39,21 +39,22 @@ def list_chapters(novel_slug: str | None = None):
         key=lambda p: parse_chapter_filename(p.name)[0],
     )
     conn = state._conn
-    for f in files:
-        num, zh_title = parse_chapter_filename(f.name)
-        # Nếu chapter đã tồn tại với slug "unknown", cập nhật sang slug đúng
-        conn.execute(
-            """INSERT INTO chapters(filename, novel_slug, chapter_num, zh_title)
-               VALUES(?, ?, ?, ?)
-               ON CONFLICT(filename) DO UPDATE SET
-                 novel_slug  = CASE WHEN novel_slug = 'unknown'
-                                    THEN excluded.novel_slug
-                                    ELSE novel_slug END,
-                 chapter_num = excluded.chapter_num,
-                 zh_title    = excluded.zh_title""",
-            [f.name, novel_slug or "unknown", num, zh_title],
-        )
-    conn.commit()
+    with state._tlock:
+        for f in files:
+            num, zh_title = parse_chapter_filename(f.name)
+            # Nếu chapter đã tồn tại với slug "unknown", cập nhật sang slug đúng
+            conn.execute(
+                """INSERT INTO chapters(filename, novel_slug, chapter_num, zh_title)
+                   VALUES(?, ?, ?, ?)
+                   ON CONFLICT(filename) DO UPDATE SET
+                     novel_slug  = CASE WHEN novel_slug = 'unknown'
+                                        THEN excluded.novel_slug
+                                        ELSE novel_slug END,
+                     chapter_num = excluded.chapter_num,
+                     zh_title    = excluded.zh_title""",
+                [f.name, novel_slug or "unknown", num, zh_title],
+            )
+        conn.commit()
     chapters = state.get_chapters(novel_slug)
     if novel_slug:
         reviews = {r["filename"]: r for r in state.get_reviews(novel_slug)}
@@ -113,6 +114,11 @@ async def upload_chapters(
         # Ghi file + đăng ký DB cho TỪNG file một cách độc lập. Commit ngay sau mỗi
         # file để một file lỗi không bỏ dở transaction trên connection dùng chung
         # (transaction treo sẽ làm cả app thấy dòng chưa-commit, sinh tên không khớp).
+        owner = state.get_chapter(name)
+        if owner and owner["novel_slug"] not in (novel_slug, "unknown", None):
+            errors.append(f"{name}: trùng tên với chương của truyện '{owner['novel_slug']}' — đổi tên file")
+            continue
+
         try:
             dest = safe_child(settings.input_dir, name)
             dest.write_bytes(await f.read())

@@ -15,11 +15,10 @@ CATEGORIES = ["character", "place", "realm", "skill", "other"]
 
 def _make_registry(state: SharedState, rules_dir: Path, slug: str) -> ToolRegistry:
     reg = ToolRegistry()
-    resolved: list[dict] = []
 
     async def read_flagged_terms() -> str:
         """Lấy tất cả thuật ngữ chưa được giải quyết."""
-        terms = state.get_flagged_terms(resolved=False)
+        terms = state.get_flagged_terms(resolved=False, novel_slug=slug)
         if not terms:
             return "Không có thuật ngữ nào cần xử lý."
         return json.dumps(terms, ensure_ascii=False)
@@ -28,23 +27,22 @@ def _make_registry(state: SharedState, rules_dir: Path, slug: str) -> ToolRegist
         """Thêm một thuật ngữ vào novel.md. category: character|place|realm|skill|other"""
         if category not in CATEGORIES:
             category = "character"
-        resolved.append({"zh": zh_term, "vi": vi_term, "type": category, "notes": notes})
-        await state.resolve_term(zh_term)
+        # Ghi novel.md NGAY rồi mới đánh resolved — trước đây term chỉ nằm trong bộ
+        # nhớ chờ flush_to_novel, agent dừng giữa chừng (MAX_ITER, 429) là mất term
+        # trong khi DB đã đánh resolved.
+        append_terms_to_novel(rules_dir, slug,
+                              [{"zh": zh_term, "vi": vi_term, "type": category, "notes": notes}])
+        await state.resolve_term(zh_term, slug)
         return f"OK: {zh_term} → {vi_term} [{category}]"
 
     async def skip_term(zh_term: str, reason: str) -> str:
         """Bỏ qua thuật ngữ không phải danh từ riêng (ví dụ: từ thông thường)."""
-        await state.resolve_term(zh_term)
+        await state.resolve_term(zh_term, slug)
         return f"Bỏ qua: {zh_term} ({reason})"
 
     async def flush_to_novel() -> str:
-        """Ghi tất cả thuật ngữ đã xử lý vào novel.md."""
-        if not resolved:
-            return "Không có thuật ngữ mới."
-        append_terms_to_novel(rules_dir, slug, resolved)
-        count = len(resolved)
-        resolved.clear()
-        return f"Đã ghi {count} thuật ngữ vào novel.md"
+        """Xác nhận đã xử lý xong (add_term đã ghi thẳng vào novel.md)."""
+        return "Mọi thuật ngữ đã được ghi vào novel.md"
 
     reg.register(read_flagged_terms, "read_flagged_terms", read_flagged_terms.__doc__)
     reg.register(add_term, "add_term", add_term.__doc__)

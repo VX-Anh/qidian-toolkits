@@ -105,8 +105,11 @@ class BaseAgent:
             cur: dict | None = None   # call đang nhận partial args
             pending_sig = None        # thought_signature chờ gắn vào function_call
             streamed_content = False  # đã stream nội dung save_chapter chưa
+            finish_reason = None
 
             async for chunk in stream:
+                if chunk.candidates and chunk.candidates[0].finish_reason:
+                    finish_reason = chunk.candidates[0].finish_reason
                 if not chunk.candidates or not chunk.candidates[0].content:
                     continue
                 for part in (chunk.candidates[0].content.parts or []):
@@ -144,6 +147,15 @@ class BaseAgent:
                     if getattr(part, "text", None) and not getattr(part, "thought", False):
                         full_text += part.text
                         yield self._emit("token", text=part.text)
+
+            # Chạm max_output_tokens giữa chừng → args của tool call (vd content của
+            # save_chapter) có thể chỉ là một nửa. Không thực thi, báo lỗi để chương
+            # bị đánh FAILED thay vì lưu bản dịch cụt rồi đánh DONE.
+            if fcalls and finish_reason == types.FinishReason.MAX_TOKENS:
+                raise RuntimeError(
+                    "Output bị cắt do chạm MAX_OUTPUT_TOKENS "
+                    f"({settings.max_output_tokens}) — tăng MAX_OUTPUT_TOKENS hoặc chia nhỏ chương"
+                )
 
             # Không có tool call → model đã trả lời xong
             if not fcalls:

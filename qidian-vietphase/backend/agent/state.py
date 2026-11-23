@@ -104,6 +104,18 @@ class SharedState:
             self._conn.commit()
         except Exception:
             pass
+        # flagged_terms thiếu novel_slug → extractor từng gộp term của mọi truyện.
+        # Thêm cột + điền lại từ bảng chapters cho các dòng cũ.
+        try:
+            self._conn.execute("ALTER TABLE flagged_terms ADD COLUMN novel_slug TEXT")
+        except Exception:
+            pass
+        self._conn.execute(
+            """UPDATE flagged_terms SET novel_slug =
+                   (SELECT novel_slug FROM chapters WHERE chapters.filename = flagged_terms.chapter)
+               WHERE novel_slug IS NULL"""
+        )
+        self._conn.commit()
 
     def _recover_stale_in_progress(self):
         """Khởi động lại server → không asyncio task nào sống sót, nên mọi chương
@@ -182,31 +194,50 @@ class SharedState:
 
     # ── Flagged terms ─────────────────────────────────────────────────────────
 
-    async def flag_term(self, zh_term: str, context: str, chapter: str):
+    async def flag_term(self, zh_term: str, context: str, chapter: str,
+                        novel_slug: Optional[str] = None):
         with self._tlock:
+            if novel_slug is None:
+                row = self._conn.execute(
+                    "SELECT novel_slug FROM chapters WHERE filename=?", [chapter]
+                ).fetchone()
+                novel_slug = row["novel_slug"] if row else None
             exists = self._conn.execute(
                 "SELECT 1 FROM flagged_terms WHERE zh_term=? AND chapter=?",
                 [zh_term, chapter],
             ).fetchone()
             if not exists:
                 self._conn.execute(
-                    "INSERT INTO flagged_terms(zh_term, context, chapter) VALUES(?,?,?)",
-                    [zh_term, context, chapter],
+                    "INSERT INTO flagged_terms(zh_term, context, chapter, novel_slug) VALUES(?,?,?,?)",
+                    [zh_term, context, chapter, novel_slug],
                 )
                 self._conn.commit()
 
-    def get_flagged_terms(self, resolved: bool = False) -> list[dict]:
+    def get_flagged_terms(self, resolved: bool = False,
+                          novel_slug: Optional[str] = None) -> list[dict]:
         with self._tlock:
-            rows = self._conn.execute(
-                "SELECT * FROM flagged_terms WHERE resolved=?", [int(resolved)]
-            ).fetchall()
+            if novel_slug:
+                rows = self._conn.execute(
+                    "SELECT * FROM flagged_terms WHERE resolved=? AND novel_slug=?",
+                    [int(resolved), novel_slug],
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM flagged_terms WHERE resolved=?", [int(resolved)]
+                ).fetchall()
         return [dict(r) for r in rows]
 
-    async def resolve_term(self, zh_term: str):
+    async def resolve_term(self, zh_term: str, novel_slug: Optional[str] = None):
         with self._tlock:
-            self._conn.execute(
-                "UPDATE flagged_terms SET resolved=1 WHERE zh_term=?", [zh_term]
-            )
+            if novel_slug:
+                self._conn.execute(
+                    "UPDATE flagged_terms SET resolved=1 WHERE zh_term=? AND novel_slug=?",
+                    [zh_term, novel_slug],
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE flagged_terms SET resolved=1 WHERE zh_term=?", [zh_term]
+                )
             self._conn.commit()
 
     # ── Reviews ───────────────────────────────────────────────────────────────

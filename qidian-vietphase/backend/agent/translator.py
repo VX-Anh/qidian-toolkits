@@ -44,7 +44,7 @@ def _make_registry(
 
     async def flag_unknown_term(zh_term: str, context: str) -> str:
         """Đánh dấu thuật ngữ chưa biết để ExtractorAgent xử lý sau."""
-        await state.flag_term(zh_term, context, filename)
+        await state.flag_term(zh_term, context, filename, novel_slug)
         return f"Đã ghi nhận: {zh_term}"
 
     async def save_chapter(vi_title: str, content: str) -> str:

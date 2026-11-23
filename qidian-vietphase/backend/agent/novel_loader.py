@@ -1,3 +1,5 @@
+import os
+import threading
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -133,7 +135,25 @@ def list_novels(rules_dir: Path) -> list[str]:
     ]
 
 
+# Mọi read-modify-write novel.md (extractor, sửa glossary/Settings trên UI) đi qua
+# lock này + ghi atomic, để hai luồng ghi cùng lúc không đè mất thay đổi của nhau
+# và crash giữa chừng không để lại file hỏng.
+NOVEL_MD_LOCK = threading.RLock()
+
+
+def write_novel_md(path: Path, content: str) -> None:
+    """Ghi atomic: ghi file tạm cùng thư mục rồi os.replace."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def append_terms_to_novel(rules_dir: Path, slug: str, new_terms: list[dict]):
+    with NOVEL_MD_LOCK:
+        _append_terms_locked(rules_dir, slug, new_terms)
+
+
+def _append_terms_locked(rules_dir: Path, slug: str, new_terms: list[dict]):
     """Thêm các term mới vào đúng section trong novel.md."""
     path = rules_dir / slug / "novel.md"
     if not path.exists():
@@ -169,7 +189,7 @@ def append_terms_to_novel(rules_dir: Path, slug: str, new_terms: list[dict]):
             content += f"\n\n{marker}\n\n| Tiếng Trung | Tiếng Việt | Ghi chú |\n|---|---|---|\n"
             content += "\n".join(rows) + "\n"
 
-    path.write_text(content, encoding="utf-8")
+    write_novel_md(path, content)
 
 
 def _default_prompt() -> str:
