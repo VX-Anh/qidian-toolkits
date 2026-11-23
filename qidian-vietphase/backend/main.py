@@ -109,7 +109,14 @@ app.include_router(wiki.router)
 
 FRONTEND = Path(__file__).parent.parent / "frontend"
 
-app.mount("/static", NoCacheStaticFiles(directory=str(FRONTEND)), name="static")
+# Dev: tắt cache để sửa JSX là thấy ngay. Prod: cache bình thường (ETag/Last-Modified);
+# file build có ?v=<hash> nên đổi bản là trình duyệt tải lại.
+_Static = NoCacheStaticFiles if settings.dev_mode else StaticFiles
+app.mount("/static", _Static(directory=str(FRONTEND)), name="static")
+
+# Bản build sẵn (node frontend/build.mjs): JSX đã biên dịch + React production.
+# Dùng khi có và DEV_MODE tắt; không có thì vẫn chạy bản dev (Babel trong trình duyệt).
+_DIST_INDEX = FRONTEND / "dist" / "index.html"
 
 
 @app.get("/health")
@@ -125,4 +132,6 @@ if settings.dev_mode:
 
 @app.get("/")
 def index():
-    return FileResponse(str(FRONTEND / "index.html"))
+    if not settings.dev_mode and _DIST_INDEX.is_file():
+        return FileResponse(str(_DIST_INDEX), headers={"Cache-Control": "no-cache"})
+    return FileResponse(str(FRONTEND / "index.html"), headers={"Cache-Control": "no-cache"})

@@ -12,3 +12,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Bản build frontend (node frontend/build.mjs) — sinh lại khi build image
+frontend/dist/

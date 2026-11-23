@@ -1,6 +1,12 @@
 # ── VietPhase backend (FastAPI + uvicorn, phục vụ luôn frontend tĩnh) ──────────
-# Frontend không cần build step: React + Babel qua CDN, FastAPI serve /static.
-# Nên chỉ cần một image Python chạy uvicorn là đủ.
+# Stage 1: biên dịch trước JSX + React production (frontend/build.mjs) để trình
+# duyệt không phải chạy Babel. Backend tự dùng frontend/dist/ khi DEV_MODE tắt.
+FROM node:22.11.0-alpine AS frontend
+WORKDIR /fe
+COPY frontend ./
+RUN node build.mjs
+
+# Stage 2: image chạy
 FROM python:3.11-slim
 
 # uv: trình quản lý môi trường/khoá phụ thuộc (cài đúng theo uv.lock).
@@ -21,6 +27,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 # Mã nguồn ứng dụng
 COPY backend ./backend
 COPY frontend ./frontend
+COPY --from=frontend /fe/dist ./frontend/dist
 COPY rules ./rules
 
 # Cài chính project (đăng ký package "backend")

@@ -1019,12 +1019,7 @@ function App() {
           />
         </TweakSection>
 
-        <TweakSection label="Debug">
-          <TweakToggle
-            label="Agents running"
-            value={isRunning}
-            onChange={v => { if (!v) cancelJob(); }}
-          />
+        <TweakSection label="Phím tắt">
           <TweakButton label="Open command palette (⌘K)" onClick={() => setCmdkOpen(true)} />
         </TweakSection>
       </TweaksPanel>

@@ -25,7 +25,6 @@ function TranslationView({
   //   image: "all" | "img+ocr" | "ocr+vi"
   const [view, setView] = useStateT(defaultView(isImage));
   const [showGloss, setShowGloss] = useStateT(true);
-  const [tone, setTone] = useStateT("trang trọng");
   const [pageIdx, setPageIdx] = useStateT(0);
 
   // ── fetched (static) data ──────────────────────────────────────────
@@ -211,13 +210,14 @@ function TranslationView({
     return () => { window.removeEventListener("beforeunload", h); window.__vpDirty = false; };
   }, []);
 
-  if (!chapter) return null;
-
   const flatGlossary = useMemoT(() => {
     const arr = [];
     Object.entries(glossary).forEach(([cat, items]) => items.forEach(i => arr.push({ ...i, cat })));
     return arr.sort((a, b) => b.zh.length - a.zh.length);
   }, [glossary]);
+
+  // Return sớm chỉ SAU khi đã gọi hết hook (Rules of Hooks).
+  if (!chapter) return null;
 
   // Which panes are shown
   const showImage = isImage && (view === "all" || view === "img+ocr");
@@ -366,8 +366,6 @@ function TranslationView({
         {showVi && (
           <ViPane
             chapter={chapter}
-            tone={tone}
-            onTone={setTone}
             translated={translated}
             isStreaming={isStreaming}
             onSaveOutput={onSaveOutput}
@@ -611,7 +609,7 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
 }
 
 // ── Vietnamese translation pane (right) ────────────────────────────────
-function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput, onEditingChange }) {
+function ViPane({ chapter, translated, isStreaming, onSaveOutput, onEditingChange }) {
   const [override, setOverride] = useStateT(null); // local saved edit
   const [editing, setEditing] = useStateT(false);
   const [draft, setDraft] = useStateT("");
@@ -654,20 +652,7 @@ function ViPane({ chapter, tone, onTone, translated, isStreaming, onSaveOutput, 
           </div>
         ) : (
           <>
-            <span className="chip" style={{ marginLeft: "auto" }}>
-              <Icon name="user" size={11} /> tone: {tone}
-            </span>
-            <select
-              className="input-field"
-              value={tone}
-              onChange={e => onTone(e.target.value)}
-              style={{ fontSize: 11, padding: "2px 8px" }}
-            >
-              <option value="trang trọng">Trang trọng</option>
-              <option value="phổ thông">Phổ thông</option>
-              <option value="cô đọng">Cô đọng</option>
-            </select>
-            <button className="btn ghost sm" onClick={copyToClipboard}>
+            <button className="btn ghost sm" onClick={copyToClipboard} style={{ marginLeft: "auto" }}>
               <Icon name="copy" size={11} /> Sao chép
             </button>
             <button className="btn ghost sm" onClick={enterEdit} disabled={isStreaming} title="Sửa bản dịch">

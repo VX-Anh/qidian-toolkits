@@ -1,4 +1,4 @@
-// api_bridge.js — empty initial globals; App.jsx populates from real API
+// api_bridge.js — chạy trước app: bọc fetch để chuyển sang /login khi API trả 401.
 
 // Server bật API_TOKEN mà chưa đăng nhập → mọi /api/* trả 401: chuyển sang /login.
 (function () {
@@ -13,11 +13,3 @@
   };
 })();
 
-window.NOVELS   = [];
-window.CHAPTERS = [];
-window.GLOSSARY = { characters: [], places: [], realms: [], skills: [] };
-window.AGENTS   = [];
-window.NOVEL_MD_DEFAULT = '';
-window.SOURCE_TEXT      = '';
-window.TRANSLATED_TEXT  = '';
-window.OCR_PAGES        = [];
