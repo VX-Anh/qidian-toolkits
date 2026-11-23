@@ -193,6 +193,8 @@ function OutputScreen({
   const aaPanelRef = useRefO(null);
   const tocListRef = useRefO(null);
   const tocAsideRef = useRefO(null);
+  // Tăng khi áp bản dịch vừa lưu: GET đang chạy từ trước đó (thành công hay lỗi) bị bỏ.
+  const contentRevRef = useRefO(0);
 
   const filename = cur?.filename || null;
   const loadKey = rdLoadKey(filename, loadSeq);
@@ -320,6 +322,8 @@ function OutputScreen({
     if (!filename) return;
     let alive = true;   // đổi chương nhanh → bỏ response cũ
     const key = loadKey;
+    const rev = contentRevRef.current;
+    const stale = () => !alive || contentRevRef.current !== rev;
     fetch(`/api/chapters/${encodeURIComponent(filename)}/output`)
       .then(async r => {
         if (!r.ok) {
@@ -330,12 +334,12 @@ function OutputScreen({
         return r.json();
       })
       .then(d => {
-        if (!alive) return;
+        if (stale()) return;
         const text = typeof d?.content === "string" ? d.content : "";
         setLoadRes({ key, content: text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"), error: null });
       })
       .catch(err => {
-        if (!alive) return;
+        if (stale()) return;
         const offline = typeof navigator !== "undefined" && navigator.onLine === false;
         setLoadRes({ key, content: "", error: { msg: err?.message || "Lỗi không rõ", offline } });
       });
@@ -348,6 +352,10 @@ function OutputScreen({
   useEffectO(() => {
     if (!savedOutput || !filename || savedOutput.filename !== filename) return;
     const text = String(savedOutput.content || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    contentRevRef.current++;
+    // Nội dung đổi → giữ nguyên vị trí cuộn hiện tại (không nhảy về đầu chương).
+    const box = scrollRef.current;
+    if (box && text !== content) restoreRef.current = { filename, keepTop: box.scrollTop };
     setLoadRes({ key: loadKey, content: text, error: null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedOutput]);
@@ -373,6 +381,11 @@ function OutputScreen({
     const r = restoreRef.current;
     restoreRef.current = null;
     if (!r || r.filename !== filename) { box.scrollTop = 0; return; }
+    if (r.keepTop != null) {
+      box.scrollTop = Math.min(r.keepTop, Math.max(0, box.scrollHeight - box.clientHeight));
+      lastTopRef.current = box.scrollTop;
+      return;
+    }
     const el = box.querySelector(`[data-para="${r.para}"]`);
     box.scrollTop = rdRestoreTop({
       paraTop: el ? rdParaTop(box, el) : null,

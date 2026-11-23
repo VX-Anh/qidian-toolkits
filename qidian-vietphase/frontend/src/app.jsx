@@ -171,7 +171,8 @@ function App() {
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
   const [glossaryStatus, setGlossaryStatus] = useStateA("loading");
-  const glossarySlugRef = useRefA(null);   // glossary đang hiện thuộc truyện nào
+  const glossarySlugRef = useRefA(null);
+  const outSaveSeqRef = useRefA({});   // filename → lượt lưu bản dịch mới nhất (tính từ lúc gửi)   // glossary đang hiện thuộc truyện nào
   const [wikiEntities, setWikiEntities] = useStateA([]);
   const [wikiStatus, setWikiStatus] = useStateA("loading");
   const [novelMd, setNovelMd] = useStateA("");
@@ -609,7 +610,7 @@ function App() {
 
   // ── File upload ──────────────────────────────────────────────────────
   async function handleUpload(files) {
-    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi upload!", type: "error" }); return; }
+    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi tải lên!", type: "error" }); return; }
     const txtFiles = [...files].filter(f => f.name.endsWith(".txt"));
     if (!txtFiles.length) { setToast({ msg: "Chỉ chấp nhận file .txt", type: "error" }); return; }
     const slug = currentSlug;   // giữ cố định: người dùng có thể đổi truyện trong lúc chờ
@@ -623,11 +624,11 @@ function App() {
       if (saved.length && currentSlugRef.current === slug) loadChapters(slug);
       if (errors.length) {
         setToast({
-          msg: `${saved.length ? `Đã upload ${saved.length} file. ` : ""}Lỗi ${errors.length} file: ${errors.join(" · ")}`,
+          msg: `${saved.length ? `Đã tải lên ${saved.length} file. ` : ""}Lỗi ${errors.length} file: ${errors.join(" · ")}`,
           type: "error",
         });
       } else if (saved.length) {
-        setToast({ msg: `Đã upload ${saved.length} file`, type: "success" });
+        setToast({ msg: `Đã tải lên ${saved.length} file`, type: "success" });
       }
     } catch (err) {
       setToast({ msg: `Tải lên thất bại: ${err.message}`, type: "error" });
@@ -688,7 +689,7 @@ function App() {
   }
 
   async function handleUploadImages(files, engine = "paddle") {
-    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi upload ảnh!", type: "error" }); return; }
+    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi tải ảnh lên!", type: "error" }); return; }
     const imgs = [...files].filter(f => f.type.startsWith("image/"));
     if (!imgs.length) { setToast({ msg: "Chỉ chấp nhận file ảnh", type: "error" }); return; }
     const fd = new FormData();
@@ -812,8 +813,13 @@ function App() {
 
   async function onSaveOutputText(filename, text) {
     try {
+      const seq = (outSaveSeqRef.current[filename] || 0) + 1;
+      outSaveSeqRef.current[filename] = seq;
       await api.put(`/api/chapters/${encodeURIComponent(filename)}/output`, { content: text });
-      setSavedOutput(prev => ({ filename, content: text, n: (prev?.n || 0) + 1 }));
+      // Phản hồi của lượt lưu cũ về sau lượt mới → không phát bản cũ sang màn đọc.
+      if (outSaveSeqRef.current[filename] === seq) {
+        setSavedOutput(prev => ({ filename, content: text, n: (prev?.n || 0) + 1 }));
+      }
       setToast({ msg: "Đã lưu bản dịch", type: "success" });
       return true;
     } catch (err) {
