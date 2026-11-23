@@ -4,8 +4,29 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>AI-Translate · VietPhase</title>
+  <script>
+    (function () {
+      let theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      try {
+        const saved = localStorage.getItem("vp:theme");
+        if (saved === "light" || saved === "dark") theme = saved;
+      } catch { /* Dùng giao diện hệ thống khi không đọc được tuỳ chọn. */ }
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <link rel="stylesheet" href="/static/tokens.css" />
   <link rel="stylesheet" href="/static/src/styles.css" />
+  <link rel="stylesheet" href="/static/src/reader.css" />
+  <style>
+    button.rail-item {
+      background: transparent;
+      border: 0;
+      border-inline-start: 2px solid transparent;
+    }
+    @media (max-width: 768px) {
+      .rail:not(.open) { visibility: hidden; }
+    }
+  </style>
 </head>
 <body>
   <div id="root"></div>

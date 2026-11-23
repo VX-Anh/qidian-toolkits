@@ -61,21 +61,26 @@ const api = {
 };
 
 // ── Hash routing ──────────────────────────────────────────────────────────────
-// URL có dạng  #/{novel_slug}/{tab}  để vào thẳng từng trang.
+// Màn đọc dùng #/{slug}/output/{chương}, thêm /doi-chieu khi mở đối chiếu.
 const VALID_TABS = ["chapters", "glossary", "wiki", "output", "settings"];
 
 function parseHash() {
   const parts = (location.hash || "").replace(/^#\/?/, "").split("/");
+  const tab = VALID_TABS.includes(parts[1]) ? parts[1] : "chapters";
+  const chapter = parts[2] ? decodeURIComponent(parts[2]) : null;
   return {
     slug: parts[0] ? decodeURIComponent(parts[0]) : null,
-    tab: parts[1] || null,
-    chapter: parts[2] ? decodeURIComponent(parts[2]) : null,  // số chương
+    tab,
+    readerChapter: tab === "output" ? chapter : null,
+    chapter: tab !== "output" || parts[3] === "doi-chieu" ? chapter : null,
   };
 }
 
-function buildHash(slug, tab, chapter) {
+function buildHash(slug, tab, chapter, readerChapter) {
   let h = `#/${encodeURIComponent(slug)}/${tab}`;
-  if (chapter != null && chapter !== "") h += `/${encodeURIComponent(chapter)}`;
+  const num = chapter ?? (tab === "output" ? readerChapter : null);
+  if (num != null) h += `/${encodeURIComponent(num)}`;
+  if (tab === "output" && chapter != null) h += "/doi-chieu";
   return h;
 }
 
@@ -88,10 +93,37 @@ function App() {
     document.documentElement.setAttribute("data-density", tweaks.density);
   }, [tweaks.accent, tweaks.density]);
 
+  const [theme, setTheme] = useStateA(() => {
+    try {
+      const saved = localStorage.getItem("vp:theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch { /* Dùng giao diện hệ thống khi không đọc được tuỳ chọn. */ }
+    return "system";
+  });
+
+  useEffectA(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme = theme === "system"
+        ? (media.matches ? "dark" : "light") : theme;
+    };
+    apply();
+    if (theme !== "system") return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
+
+  function changeTheme(value) {
+    setTheme(value);
+    try { localStorage.setItem("vp:theme", value); } catch { /* Vẫn áp dụng trong phiên này. */ }
+  }
+
   // ── Core state ───────────────────────────────────────────────────────
   const [novels, setNovels] = useStateA([]);
   const [currentSlug, setCurrentSlug] = useStateA(null);
-  const [tab, setTab] = useStateA("chapters");
+  const [tab, setRouteTab] = useStateA("chapters");
+  const [readerChapter, setReaderChapter] = useStateA(null);
+  const [chaptersStatus, setChaptersStatus] = useStateA("loading");
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
   const [wikiEntities, setWikiEntities] = useStateA([]);
@@ -112,8 +144,6 @@ function App() {
 
   const esRef = useRefA(null);
   const activeJobIdRef = useRefA(null);
-  const openChapterRef = useRefA(null);
-  useEffectA(() => { openChapterRef.current = openChapter; }, [openChapter]);
   // Luôn phản ánh truyện đang hiển thị — để guard SSE không nạp dữ liệu job cũ
   // vào truyện khác khi người dùng đổi truyện giữa lúc đang dịch.
   const currentSlugRef = useRefA(null);
@@ -125,6 +155,8 @@ function App() {
   const pendingChapterRef = useRefA(null);
   // Chương mở ở lần đồng bộ URL trước — để phân biệt "vừa mở" (push) vs còn lại (replace).
   const prevOpenRef = useRefA(null);
+  const syncedHashRef = useRefA(null);
+  const chapterRequestRef = useRefA(0);
 
   // ── Computed ─────────────────────────────────────────────────────────
   const currentNovel = useMemoA(() => {
@@ -167,9 +199,11 @@ function App() {
 
   // ── Data loading ─────────────────────────────────────────────────────
   async function loadChapters(slug) {
+    if (currentSlugRef.current !== slug) return;
+    const request = ++chapterRequestRef.current;
     try {
       const data = await api.get(`/api/chapters?novel_slug=${encodeURIComponent(slug)}`);
-      if (currentSlugRef.current !== slug) return;   // đã đổi truyện → bỏ response cũ
+      if (currentSlugRef.current !== slug || chapterRequestRef.current !== request) return;
       setChapters(prev => data.map(ch => {
         // Preserve any live progress already tracked in the UI
         const existing = prev.find(c => c.filename === ch.filename);
@@ -192,7 +226,10 @@ function App() {
           progress: ch.status === "in_progress" ? (existing?.progress || 50) : 0,
         };
       }));
+      setChaptersStatus("ready");
     } catch (err) {
+      if (currentSlugRef.current !== slug || chapterRequestRef.current !== request) return;
+      setChaptersStatus("error");
       setToast({ msg: `Lỗi tải chương: ${err.message}`, type: "error" });
     }
   }
@@ -268,11 +305,14 @@ function App() {
         setNovels(mapped);
         if (mapped.length > 0) {
           // Vào thẳng truyện/trang/chương theo URL nếu hợp lệ, nếu không lấy truyện đầu.
-          const { slug: hashSlug, tab: hashTab, chapter: hashChapter } = parseHash();
-          const slug = mapped.some(n => n.slug === hashSlug) ? hashSlug : mapped[0].slug;
+          const route = parseHash();
+          const slug = mapped.some(n => n.slug === route.slug) ? route.slug : mapped[0].slug;
           setCurrentSlug(slug);
-          if (hashTab && VALID_TABS.includes(hashTab)) setTab(hashTab);
-          if (hashChapter) pendingChapterRef.current = hashChapter;  // mở khi chương nạp xong
+          setRouteTab(route.tab);
+          if (slug === route.slug) {
+            setReaderChapter(route.readerChapter);
+            pendingChapterRef.current = route.chapter;
+          }
         }
       })
       .catch(err => setToast({ msg: `Lỗi tải danh sách truyện: ${err.message}`, type: "error" }));
@@ -284,15 +324,15 @@ function App() {
   //  • Còn lại    → replaceState (đổi tab/truyện/prev-next/đóng chương: không tạo rác history).
   useEffectA(() => {
     if (!currentSlug) return;
-    const chNum = openChapter ? openChapter.chapter_num : null;
-    const want = buildHash(currentSlug, tab, chNum);
-    if (location.hash === want) { prevOpenRef.current = openChapter; return; }
-
-    const justOpened = !prevOpenRef.current && openChapter;
-    if (justOpened) history.pushState(null, "", want);
-    else            history.replaceState(null, "", want);
+    const chNum = openChapter?.chapter_num ?? pendingChapterRef.current;
+    const want = buildHash(currentSlug, tab, chNum, readerChapter);
+    if (location.hash !== want) {
+      if (!prevOpenRef.current && openChapter) history.pushState(null, "", want);
+      else history.replaceState(null, "", want);
+    }
+    syncedHashRef.current = want;
     prevOpenRef.current = openChapter;
-  }, [currentSlug, tab, openChapter]);
+  }, [currentSlug, tab, openChapter, readerChapter]);
 
   // Mở chương đang chờ từ URL khi danh sách chương vừa nạp xong.
   useEffectA(() => {
@@ -305,19 +345,26 @@ function App() {
   // hash → state: back/forward hoặc sửa URL thủ công.
   useEffectA(() => {
     const onHash = () => {
-      const { slug, tab: t, chapter } = parseHash();
-      if (slug && slug !== currentSlugRef.current && novels.some(n => n.slug === slug)) {
-        selectNovel(slug);
+      if (!currentSlugRef.current) return;
+      const { slug, tab: nextTab, readerChapter: nextReaderChapter, chapter } = parseHash();
+      const changedNovel = slug && slug !== currentSlugRef.current && novels.some(n => n.slug === slug);
+      const ch = !changedNovel && chapter
+        ? chaptersRef.current.find(c => String(c.chapter_num) === chapter)
+        : null;
+      const rejected = changedNovel
+        ? !selectNovel(slug)
+        : window.__vpDirty && ch?.chapter_num !== prevOpenRef.current?.chapter_num
+          && !window.confirm("Đang sửa dở chưa lưu. Bỏ thay đổi?");
+      if (rejected) {
+        history.replaceState(null, "", syncedHashRef.current);
+        return;
       }
-      if (t && VALID_TABS.includes(t)) setTab(t);
-      // Mở/đóng chương theo URL.
-      if (chapter) {
-        const ch = chaptersRef.current.find(c => String(c.chapter_num) === String(chapter));
-        if (ch) setOpenChapter(ch);
-        else pendingChapterRef.current = chapter;  // đổi truyện xong sẽ mở
-      } else if (openChapterRef.current) {
-        setOpenChapter(null);
-      }
+      setRouteTab(nextTab);
+      setReaderChapter(nextReaderChapter);
+      pendingChapterRef.current = ch ? null : chapter;
+      setOpenChapter(ch || null);
+      // Trình duyệt đã tạo entry cho URL đang mở.
+      prevOpenRef.current = ch || null;
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -329,7 +376,6 @@ function App() {
     // Xoá dữ liệu truyện cũ ngay để không hiện/lưu nhầm trong lúc chờ tải.
     novelMdMeta.current = { slug: null, version: null, dirty: false };
     setNovelMd("");
-    setChapters([]);
     loadChapters(currentSlug);
     loadGlossary(currentSlug);
     loadNovelMd(currentSlug);
@@ -759,7 +805,7 @@ function App() {
         cover_glyph: n.cover_glyph || (n.zh_name || "?")[0],
       };
       setNovels(ns => [...ns, novel]);
-      setCurrentSlug(n.slug);
+      selectNovel(n.slug);
       setToast({ msg: `Đã tạo truyện "${n.vi_name}"`, type: "success" });
     } catch (err) {
       setToast({ msg: `Lỗi tạo truyện: ${err.message}`, type: "error" });
@@ -786,15 +832,20 @@ function App() {
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, []);
+  }, [tab]);
 
   // ── Handlers ─────────────────────────────────────────────────────────
   function selectNovel(slug) {
     setRailOpen(false);  // đóng drawer mobile khi chọn truyện
-    if (slug === currentSlugRef.current) return;
+    if (slug === currentSlugRef.current) return true;
     const dirty = novelMdMeta.current.dirty || window.__vpDirty;
-    if (dirty && !window.confirm("Đang sửa dở chưa lưu (novel.md hoặc chương). Bỏ thay đổi và chuyển truyện?")) return;
+    if (dirty && !window.confirm("Đang sửa dở chưa lưu (novel.md hoặc chương). Bỏ thay đổi và chuyển truyện?")) return false;
+    currentSlugRef.current = slug;
+    chapterRequestRef.current++;
+    chaptersRef.current = [];
     setCurrentSlug(slug);
+    setReaderChapter(null);
+    setChaptersStatus("loading");
     setChapters([]);
     setGlossary({ characters: [], places: [], realms: [], skills: [] });
     setWikiEntities([]);
@@ -802,6 +853,20 @@ function App() {
     setStreamingTexts({});
     setOpenChapter(null);
     pendingChapterRef.current = null;
+    return true;
+  }
+
+  function setTab(nextTab) {
+    if (nextTab === tab) return;
+    setRouteTab(nextTab);
+    if (nextTab !== "output") setReaderChapter(null);
+    pendingChapterRef.current = null;
+  }
+
+  function reloadReaderChapters() {
+    if (!currentSlug) return;
+    setChaptersStatus("loading");
+    loadChapters(currentSlug);
   }
 
   const toggleCheck = (fn) => setChecked(c => ({ ...c, [fn]: !c[fn] }));
@@ -864,7 +929,7 @@ function App() {
 
   return (
     <>
-      <div className="app" data-layout={tweaks.layout}>
+      <div className="app" data-layout={tweaks.layout} data-reading={tab === "output" ? "true" : undefined}>
         <LeftRail
           novels={novelsWithStats}
           currentSlug={currentSlug}
@@ -886,6 +951,8 @@ function App() {
             onToggleActivity={() => setTweak("showActivity", !tweaks.showActivity)}
             isRunning={isRunning}
             tabCounts={tabCounts}
+            theme={theme}
+            onTheme={changeTheme}
             onOpenRail={() => setRailOpen(true)}
           />
 
@@ -936,10 +1003,19 @@ function App() {
 
           {tab === "output" && (
             <OutputScreen
+              key={currentSlug}
               chapters={chapters}
+              chaptersStatus={chaptersStatus}
+              onReloadChapters={reloadReaderChapters}
               novel={currentNovel}
+              routeChapter={readerChapter}
+              onReadChapter={num => setReaderChapter(String(num))}
               onOpen={setOpenChapter}
-              mode={tweaks.fontReading}
+              onGoChapters={() => setTab("chapters")}
+              onOpenRail={() => setRailOpen(true)}
+              suspendKeys={!!openChapter || cmdkOpen || railOpen || newOpen}
+              fontMode={tweaks.fontReading}
+              onFontMode={value => setTweak("fontReading", value)}
             />
           )}
 
