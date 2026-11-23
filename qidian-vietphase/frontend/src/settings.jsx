@@ -35,27 +35,33 @@ function stSetPrompt(md, value) {
   return md.replace(re, `$1\n${value}\n`);
 }
 
-function SettingsScreen({ novel, novelMd, onChange, onSave }) {
+function SettingsScreen({ novel, novelMd, mdStatus = "ready", onReloadMd, onChange, onSave }) {
   const [tab, setTab] = useStateSt("config"); // config | raw
 
   if (!novel) {
-    return <div className="empty-state">Chọn một truyện để chỉnh sửa cài đặt.</div>;
+    return (
+      <div className="empty-state">
+        <StatusBlock kind="empty" title="Chọn một truyện để chỉnh sửa cài đặt" />
+      </div>
+    );
   }
+  // Chưa có novel.md của truyện này: không hiện form (tránh sửa trên bản rỗng).
+  const mdReady = mdStatus === "ready";
 
   return (
     <div className="settings-layout">
       <div className="settings-main">
         <div className="settings-head" style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          marginBottom: 4,
+          flexWrap: "wrap", gap: 8, marginBottom: 4,
         }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{novel.vi_name}</h2>
-            <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, overflowWrap: "anywhere" }}>{novel.vi_name}</h2>
+            <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--fg-4)", fontFamily: "var(--font-mono)", overflowWrap: "anywhere" }}>
               rules/{novel.slug}/novel.md
             </p>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <SegControl
               value={tab}
               onChange={setTab}
@@ -64,31 +70,49 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
                 { v: "raw",    lbl: "Markdown", icon: "edit" },
               ]}
             />
-            <button className="btn success sm" onClick={onSave}>
+            <button className="btn success sm" onClick={onSave} disabled={!mdReady}>
               <Icon name="save" size={12} /> Lưu thay đổi
             </button>
           </div>
         </div>
 
-        {tab === "config" ? (
+        {!mdReady ? (
+          <div className="settings-card">
+            {mdStatus === "error" ? (
+              <StatusBlock
+                kind="error"
+                title="Không tải được novel.md"
+                desc={typeof navigator !== "undefined" && navigator.onLine === false
+                  ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                  : "Máy chủ không trả về file cấu hình của truyện này."}
+                actions={onReloadMd && (
+                  <button className="btn sm" onClick={onReloadMd}><Icon name="refresh" size={12} /> Thử lại</button>
+                )}
+              />
+            ) : (
+              <StatusBlock kind="loading" title="Đang tải novel.md…" />
+            )}
+          </div>
+        ) : tab === "config" ? (
           <>
             <div className="settings-card">
               <div className="settings-card-h">
                 <span className="label">Hồ sơ truyện</span>
               </div>
               <div className="settings-card-body">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                <div className="settings-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(220px, 100%), 1fr))", gap: 14 }}>
                   <div className="field">
-                    <label>Tên Trung</label>
-                    <input className="input-field" defaultValue={novel.zh_name} readOnly />
+                    <label htmlFor="st-zh">Tên Trung</label>
+                    <input id="st-zh" className="input-field" defaultValue={novel.zh_name} readOnly />
                   </div>
                   <div className="field">
-                    <label>Tên Việt</label>
-                    <input className="input-field" defaultValue={novel.vi_name} readOnly />
+                    <label htmlFor="st-vi">Tên Việt</label>
+                    <input id="st-vi" className="input-field" defaultValue={novel.vi_name} readOnly />
                   </div>
                   <div className="field">
-                    <label>Thể loại</label>
+                    <label htmlFor="st-genre">Thể loại</label>
                     <select
+                      id="st-genre"
                       className="input-field"
                       value={stGetFm(novelMd, "genre") || novel.genre || "tiên hiệp"}
                       onChange={e => onChange(stSetFm(novelMd, "genre", e.target.value))}
@@ -100,8 +124,9 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
                     </select>
                   </div>
                   <div className="field">
-                    <label>Trạng thái</label>
+                    <label htmlFor="st-status">Trạng thái</label>
                     <select
+                      id="st-status"
                       className="input-field"
                       value={stGetFm(novelMd, "status") || "đang dịch"}
                       onChange={e => onChange(stSetFm(novelMd, "status", e.target.value))}
@@ -122,6 +147,7 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
               <div className="settings-card-body">
                 <div className="field" style={{ marginBottom: 0 }}>
                   <textarea
+                    aria-label="Prompt dịch"
                     value={stGetPrompt(novelMd)}
                     onChange={e => onChange(stSetPrompt(novelMd, e.target.value))}
                     style={{ minHeight: 140 }}
@@ -134,21 +160,21 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
               <div className="settings-card-h">
                 <span className="label">Pipeline</span>
               </div>
-              <div className="settings-card-body" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+              <div className="settings-card-body" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))", gap: 14 }}>
                 <div className="field" style={{ marginBottom: 0 }}>
-                  <label>Model</label>
+                  <label id="st-model-lbl">Model</label>
                   {/* Model chọn trên server (MODEL_TRANSLATE / MODEL_LIGHT / MODEL_VISION trong .env) */}
-                  <div className="input-field" style={{ opacity: 0.8 }} title="Đổi trong .env của server">
+                  <div className="input-field" aria-labelledby="st-model-lbl" style={{ color: "var(--fg-3)" }} title="Đổi trong .env của server">
                     Claude · Sonnet dịch, Haiku việc phụ
                   </div>
                 </div>
                 <div className="field" style={{ marginBottom: 0 }}>
-                  <label>Concurrency</label>
-                  <input className="input-field" type="number" defaultValue={3} min={1} max={10} />
+                  <label htmlFor="st-conc">Concurrency</label>
+                  <input id="st-conc" className="input-field" type="number" defaultValue={3} min={1} max={10} />
                 </div>
                 <div className="field" style={{ marginBottom: 0 }}>
-                  <label>Chunk size (chars)</label>
-                  <input className="input-field" type="number" defaultValue={1200} step={100} />
+                  <label htmlFor="st-chunk">Chunk size (chars)</label>
+                  <input id="st-chunk" className="input-field" type="number" defaultValue={1200} step={100} />
                 </div>
               </div>
             </div>
@@ -157,11 +183,14 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
           <div className="settings-card" style={{ flex: 1, display: "flex", flexDirection: "column" }}>
             <div className="settings-card-h">
               <span className="label">novel.md</span>
-              <span style={{ fontSize: 10, color: "var(--fg-5)", fontFamily: "var(--font-mono)" }}>
+              <span style={{ fontSize: 10, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
                 YAML frontmatter + Markdown
               </span>
             </div>
             <textarea
+              className="settings-raw"
+              aria-label="Nội dung novel.md"
+              spellCheck={false}
               value={novelMd}
               onChange={e => onChange(e.target.value)}
               style={{
@@ -171,7 +200,7 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
                 borderRadius: 0,
                 padding: 16,
                 fontFamily: "var(--font-mono)", fontSize: 12,
-                color: "var(--fg-2)", outline: "none",
+                color: "var(--fg-2)",
                 lineHeight: 1.6,
               }}
             />
@@ -196,7 +225,7 @@ function SettingsScreen({ novel, novelMd, onChange, onSave }) {
         </div>
 
         <div className="label" style={{ marginTop: 8 }}>Hành động</div>
-        <button className="btn sm" style={{ justifyContent: "center" }} onClick={onSave}>
+        <button className="btn sm" style={{ justifyContent: "center" }} onClick={onSave} disabled={!mdReady}>
           <Icon name="save" size={12} /> Lưu novel.md
         </button>
       </aside>

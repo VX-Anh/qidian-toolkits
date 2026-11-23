@@ -12,11 +12,6 @@ const WIKI_TYPES = [
 ];
 const WIKI_TYPE = Object.fromEntries(WIKI_TYPES.map(t => [t.id, t]));
 
-const LBL = {
-  fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase",
-  color: "var(--fg-5)", fontWeight: 600,
-};
-
 // Biến mô tả thành các node React, in đậm + click được khi gặp tên thực thể khác.
 function linkifyDesc(text, entities, currentZh, onSelect) {
   if (!text) return null;
@@ -50,17 +45,18 @@ function linkifyDesc(text, entities, currentZh, onSelect) {
 
   return nodes.map((n, i) => typeof n === "string"
     ? <React.Fragment key={i}>{n}</React.Fragment>
-    : <span key={i} onClick={() => onSelect(n.zh)}
-        style={{ color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}>
+    : <button key={i} type="button" className="link-btn" onClick={() => onSelect(n.zh)}
+        title={`Xem thực thể ${n.name}`}>
         {n.name}
-      </span>);
+      </button>);
 }
 
-function WikiScreen({ entities, novelSlug }) {
+function WikiScreen({ entities, novelSlug, status = "ready", onReload }) {
   const [typeFilter, setTypeFilter] = useStateW("all");
   const [q, setQ] = useStateW("");
   const [selZh, setSelZh] = useStateW(null);
   const [detail, setDetail] = useStateW(null);
+  const [detailError, setDetailError] = useStateW(false);
 
   const counts = useMemoW(() => {
     const c = { all: entities.length };
@@ -100,12 +96,13 @@ function WikiScreen({ entities, novelSlug }) {
 
   // Tải chi tiết (kèm quan hệ) khi đổi lựa chọn
   useEffectW(() => {
-    if (!selZh || !novelSlug) { setDetail(null); return; }
+    if (!selZh || !novelSlug) { setDetail(null); setDetailError(false); return; }
     let alive = true;
+    setDetailError(false);
     fetch(`/api/wiki/${encodeURIComponent(novelSlug)}/entity/${encodeURIComponent(selZh)}`)
       .then(r => (r.ok ? r.json() : null))
       .then(d => { if (alive) setDetail(d); })
-      .catch(() => {});
+      .catch(() => { if (alive) setDetailError(true); });
     return () => { alive = false; };
   }, [selZh, novelSlug]);
 
@@ -121,15 +118,27 @@ function WikiScreen({ entities, novelSlug }) {
   if (entities.length === 0) {
     return (
       <div className="glossary-layout">
-        <div style={{
-          gridColumn: "1 / -1", display: "flex", flexDirection: "column",
-          alignItems: "center", justifyContent: "center", gap: 10, color: "var(--fg-4)",
-        }}>
-          <Icon name="book" size={32} color="var(--fg-5)" />
-          <div style={{ fontSize: 14, color: "var(--fg-3)" }}>Chưa có dữ liệu Story-Wiki</div>
-          <div style={{ fontSize: 12, maxWidth: 360, textAlign: "center" }}>
-            Dịch vài chương — WikiAgent sẽ tự trích thực thể, quan hệ và sự kiện từ nội dung.
-          </div>
+        <div style={{ gridColumn: "1 / -1", display: "grid", placeItems: "center", minWidth: 0 }}>
+          {status === "loading" ? (
+            <StatusBlock kind="loading" title="Đang tải Story-Wiki…" />
+          ) : status === "error" ? (
+            <StatusBlock
+              kind="error"
+              title="Không tải được Story-Wiki"
+              desc={typeof navigator !== "undefined" && navigator.onLine === false
+                ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                : "Máy chủ không phản hồi. Thử lại sau giây lát."}
+              actions={onReload && (
+                <button className="btn sm" onClick={onReload}><Icon name="refresh" size={12} /> Thử lại</button>
+              )}
+            />
+          ) : (
+            <StatusBlock
+              kind="empty"
+              title="Chưa có dữ liệu Story-Wiki"
+              desc="Dịch vài chương — WikiAgent sẽ tự trích thực thể, quan hệ và sự kiện từ nội dung."
+            />
+          )}
         </div>
       </div>
     );
@@ -141,6 +150,7 @@ function WikiScreen({ entities, novelSlug }) {
       <aside className="glossary-tabs">
         <button
           className={`glossary-tab ${typeFilter === "all" ? "active" : ""}`}
+          aria-pressed={typeFilter === "all"}
           onClick={() => setTypeFilter("all")}
         >
           <Icon name="list" size={13} />
@@ -151,6 +161,7 @@ function WikiScreen({ entities, novelSlug }) {
           <button
             key={t.id}
             className={`glossary-tab ${typeFilter === t.id ? "active" : ""}`}
+            aria-pressed={typeFilter === t.id}
             onClick={() => setTypeFilter(t.id)}
           >
             <Icon name={t.icon} size={13} />
@@ -165,12 +176,14 @@ function WikiScreen({ entities, novelSlug }) {
         <div className="gloss-toolbar">
           <input
             className="input-field"
+            type="search"
+            aria-label="Tìm thực thể"
             placeholder="Tìm thực thể (Hán / Việt / mô tả)…"
             value={q}
             onChange={e => setQ(e.target.value)}
-            style={{ width: 280 }}
+            style={{ width: 280, maxWidth: "100%" }}
           />
-          <span style={{ fontSize: 11, color: "var(--fg-5)" }}>
+          <span style={{ fontSize: 11, color: "var(--fg-4)" }}>
             {filtered.length} thực thể
           </span>
         </div>
@@ -182,15 +195,12 @@ function WikiScreen({ entities, novelSlug }) {
             overflowY: "auto", flexShrink: 0,
           }}>
             {filtered.map(e => (
-              <div
+              <button
+                type="button"
                 key={e.zh}
+                className="wiki-ent-item"
+                aria-current={selZh === e.zh ? "true" : undefined}
                 onClick={() => setSelZh(e.zh)}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10,
-                  padding: "9px 14px", cursor: "pointer",
-                  borderLeft: "2px solid " + (selZh === e.zh ? "var(--accent)" : "transparent"),
-                  background: selZh === e.zh ? "var(--bg-elevated)" : "transparent",
-                }}
               >
                 <Icon name={(WIKI_TYPE[e.type] || WIKI_TYPE.other).icon} size={13}
                   color="var(--fg-4)" />
@@ -201,26 +211,30 @@ function WikiScreen({ entities, novelSlug }) {
                   }}>
                     {e.vi || <span style={{ color: "var(--fg-4)" }}>(chưa có tên Việt)</span>}
                   </div>
-                  <div style={{ fontSize: 11, color: "var(--fg-5)", fontFamily: "var(--font-mono)" }}>
+                  <div style={{ fontSize: 11, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
                     {e.zh}{e.first_chapter ? ` · ch.${e.first_chapter}` : ""}
                   </div>
                 </div>
-                <span style={{ fontSize: 10, color: "var(--fg-5)", fontFamily: "var(--font-mono)" }}>
+                <span style={{ fontSize: 10, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
                   ×{e.freq}
                 </span>
-              </div>
+              </button>
             ))}
             {filtered.length === 0 && (
-              <div style={{ padding: 24, textAlign: "center", color: "var(--fg-4)", fontSize: 12 }}>
-                Không có thực thể.
-              </div>
+              <StatusBlock
+                kind="empty"
+                title="Không có thực thể khớp"
+                actions={(q || typeFilter !== "all") && (
+                  <button className="btn sm" onClick={() => { setQ(""); setTypeFilter("all"); }}>Xoá bộ lọc</button>
+                )}
+              />
             )}
           </div>
 
           {/* Bảng chi tiết */}
           <div className="wiki-ent-detail" style={{ flex: 1, overflowY: "auto", padding: 24, minWidth: 0 }}>
             {!sel ? (
-              <div style={{ color: "var(--fg-4)", fontSize: 13 }}>Chọn một thực thể để xem chi tiết.</div>
+              <StatusBlock kind="empty" title="Chọn một thực thể để xem chi tiết" />
             ) : (
               <>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -239,16 +253,22 @@ function WikiScreen({ entities, novelSlug }) {
                 </div>
 
                 <div style={{
-                  display: "flex", gap: 16, marginTop: 10,
-                  fontSize: 11, color: "var(--fg-5)", fontFamily: "var(--font-mono)",
+                  display: "flex", flexWrap: "wrap", gap: 16, marginTop: 10,
+                  fontSize: 11, color: "var(--fg-4)", fontFamily: "var(--font-mono)",
                 }}>
                   {sel.first_chapter != null && <span>Xuất hiện từ chương {sel.first_chapter}</span>}
                   <span>Tần suất ×{sel.freq}</span>
                 </div>
 
+                {detailError && (
+                  <div role="status" style={{ marginTop: 10, fontSize: 12, color: "var(--warn)" }}>
+                    Không tải được quan hệ của thực thể này — đang hiện thông tin tóm tắt.
+                  </div>
+                )}
+
                 {(sel.aliases && sel.aliases.length > 0) && (
                   <div style={{ marginTop: 16 }}>
-                    <div style={LBL}>Tên gọi khác</div>
+                    <div className="wiki-label">Tên gọi khác</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
                       {sel.aliases.map((a, i) => (
                         <span key={i} className="chip" style={{ fontFamily: "var(--font-mono)" }}>{a}</span>
@@ -258,8 +278,8 @@ function WikiScreen({ entities, novelSlug }) {
                 )}
 
                 <div style={{ marginTop: 16 }}>
-                  <div style={LBL}>Mô tả</div>
-                  <p style={{ margin: "6px 0 0", fontSize: 14, lineHeight: 1.6, color: "var(--fg-2)" }}>
+                  <div className="wiki-label">Mô tả</div>
+                  <p style={{ margin: "6px 0 0", fontSize: 14, lineHeight: 1.6, color: "var(--fg-2)", overflowWrap: "anywhere" }}>
                     {sel.description
                       ? linkifyDesc(sel.description, entities, sel.zh, setSelZh)
                       : <span style={{ color: "var(--fg-4)" }}>Chưa có mô tả.</span>}
@@ -267,7 +287,7 @@ function WikiScreen({ entities, novelSlug }) {
                 </div>
 
                 <div style={{ marginTop: 20 }}>
-                  <div style={LBL}>
+                  <div className="wiki-label">
                     Quan hệ {sel.relationships ? `(${sel.relationships.length})` : ""}
                   </div>
                   {(!sel.relationships || sel.relationships.length === 0) ? (
@@ -280,21 +300,18 @@ function WikiScreen({ entities, novelSlug }) {
                         const otherZh = r.from_zh === sel.zh ? r.to_zh : r.from_zh;
                         const outgoing = r.from_zh === sel.zh;
                         return (
-                          <div key={i} style={{
-                            display: "flex", alignItems: "center", gap: 8,
-                            fontSize: 13, padding: "6px 10px",
-                            background: "var(--bg-surface)", border: "1px solid var(--border)",
-                            borderRadius: 6,
-                          }}>
+                          <div key={i} className="wiki-rel">
                             <Icon name={outgoing ? "forward" : "back"} size={13} color="var(--fg-4)" />
+                            <span className="sr-only">{outgoing ? "Quan hệ đi tới" : "Quan hệ đến từ"}</span>
                             {r.type && <span className="chip" style={{ fontSize: 10 }}>{r.type}</span>}
-                            <span
+                            <button
+                              type="button"
+                              className="link-btn"
                               onClick={() => setSelZh(otherZh)}
-                              style={{ color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}
                             >
                               {nameOf(otherZh)}
-                            </span>
-                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-5)" }}>
+                            </button>
+                            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-4)" }}>
                               {otherZh}
                             </span>
                             {r.description && (

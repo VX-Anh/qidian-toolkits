@@ -69,20 +69,78 @@ if not settings.api_token:
     log.warning("API_TOKEN chưa đặt — /api/* KHÔNG có xác thực. Chỉ chạy như vậy ở máy local.")
 
 
-_LOGIN_HTML = """<!doctype html><html lang="vi"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>VietPhase — Đăng nhập</title>
-<style>body{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100dvh;margin:0;background:#f5f5f4}
-form{background:#fff;padding:24px;border-radius:12px;box-shadow:0 2px 12px #0001;width:min(320px,90vw)}
-input,button{width:100%;box-sizing:border-box;padding:10px;margin-top:10px;font-size:16px}
-.err{color:#b91c1c;font-size:14px}</style></head><body>
-<form method="post" action="/login"><b>VietPhase</b>{err}
-<input type="password" name="token" placeholder="API token" autofocus required>
-<button type="submit">Đăng nhập</button></form></body></html>"""
+# Trang đăng nhập cùng phong cách app: nạp /static/tokens.css (không nằm dưới /api/
+# nên không cần token), theme theo lựa chọn vp:theme của app hoặc theo hệ thống.
+# Giá trị dự phòng trong var(...) giữ trang dùng được nếu tokens.css không tải được.
+_LOGIN_HTML = """<!doctype html><html lang="vi" data-theme="dark"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>VietPhase — Đăng nhập</title>
+<script>(function(){var t=null;try{t=localStorage.getItem("vp:theme")}catch(e){}
+if(t!=="light"&&t!=="dark"){try{t=window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}catch(e){t="dark"}}
+document.documentElement.setAttribute("data-theme",t)})();</script>
+<link rel="stylesheet" href="/static/tokens.css">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{display:grid;place-items:center;min-height:100vh;min-height:100dvh;padding:var(--space-4,16px);
+  font-family:var(--font-ui,system-ui,sans-serif);font-size:var(--text-md,14px);line-height:var(--lh-base,1.5);
+  color:var(--fg-1,#f3f4f6);background:var(--bg-app,#030712);overflow-wrap:anywhere}
+:root[data-theme="light"] body{color:var(--fg-1,#111827);background:var(--bg-app,#f9fafb)}
+.login{width:100%;max-width:360px;padding:var(--space-6,24px);background:var(--bg-surface,#111827);
+  border:1px solid var(--border,#1f2937);border-radius:var(--radius-lg,8px);box-shadow:var(--shadow-modal,0 10px 40px rgba(0,0,0,.5))}
+:root[data-theme="light"] .login{background:var(--bg-surface,#fff);border-color:var(--border,#e5e7eb);box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.brand{margin:0 0 var(--space-1,4px);font-family:var(--font-display,Georgia,serif);font-size:var(--text-3xl,24px);
+  font-weight:600;line-height:var(--lh-tight,1.15);color:var(--fg-1,#f3f4f6)}
+:root[data-theme="light"] .brand{color:var(--fg-1,#111827)}
+.sub{margin:0 0 var(--space-5,20px);color:var(--fg-3,#9ca3af);font-size:var(--text-base,13px)}
+:root[data-theme="light"] .sub{color:var(--fg-3,#4b5563)}
+label{display:block;margin-bottom:var(--space-2,8px);font-weight:500;color:var(--fg-2,#e5e7eb)}
+:root[data-theme="light"] label{color:var(--fg-2,#1f2937)}
+input{display:block;width:100%;min-height:var(--tap-min,44px);padding:var(--space-2,8px) var(--space-3,12px);
+  font:inherit;font-size:16px;color:var(--fg-1,#f3f4f6);background:var(--bg-input,#1f2937);
+  border:1px solid var(--border-hover,#374151);border-radius:var(--radius-md,6px);
+  transition:border-color var(--dur,150ms) var(--ease,ease)}
+:root[data-theme="light"] input{color:var(--fg-1,#111827);background:var(--bg-input,#fff);border-color:var(--border-hover,#9ca3af)}
+input[aria-invalid="true"]{border-color:var(--danger,#f87171)}
+button{display:block;width:100%;min-height:var(--tap-min,44px);margin-top:var(--space-4,16px);
+  padding:var(--space-2,8px) var(--space-4,16px);font:inherit;font-weight:600;color:#fff;
+  background:var(--accent-fill,#4f46e5);border:1px solid transparent;border-radius:var(--radius-md,6px);cursor:pointer;
+  transition:background-color var(--dur,150ms) var(--ease,ease)}
+button:hover{background:var(--accent-fill-hover,#4338ca)}
+input:focus{outline:none}
+input:focus-visible,button:focus-visible{outline:2px solid var(--border-focus,#6366f1);outline-offset:2px}
+input:focus-visible{border-color:var(--border-focus,#6366f1)}
+.err{margin:0 0 var(--space-4,16px);padding:var(--space-2,8px) var(--space-3,12px);border-radius:var(--radius-md,6px);
+  color:var(--danger,#fca5a5);background:var(--danger-bg,#450a0a);border:1px solid var(--danger,#f87171)}
+:root[data-theme="light"] .err{color:var(--danger,#991b1b);background:var(--danger-bg,#fef2f2)}
+.err:empty{display:none}
+.hint{margin:var(--space-3,12px) 0 0;color:var(--fg-3,#9ca3af);font-size:var(--text-sm,12px)}
+:root[data-theme="light"] .hint{color:var(--fg-3,#4b5563)}
+@media (prefers-reduced-motion: reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+</style></head><body>
+<main class="login">
+<h1 class="brand">VietPhase</h1>
+<p class="sub">Nhập token để vào đọc và dịch truyện.</p>
+<div role="alert" id="login-err" class="err">{err}</div>
+<form method="post" action="/login">
+<label for="token">Token truy cập</label>
+<input id="token" type="password" name="token" autocomplete="current-password"
+  autocapitalize="off" spellcheck="false" autofocus required{invalid}>
+<button type="submit">Đăng nhập</button>
+</form>
+<p class="hint">Token là giá trị API_TOKEN đặt trên máy chủ.</p>
+</main></body></html>"""
+
+
+def _login_html(err: str = "") -> str:
+    invalid = ' aria-invalid="true" aria-describedby="login-err"' if err else ""
+    return _LOGIN_HTML.replace("{err}", err).replace("{invalid}", invalid)
 
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page():
-    return _LOGIN_HTML.replace("{err}", "")
+    return _login_html()
 
 
 @app.post("/login")
@@ -91,7 +149,7 @@ def login(request: Request, token: str = Form(...)):
         return RedirectResponse("/", status_code=303)
     if not _token_ok(token):
         return HTMLResponse(
-            _LOGIN_HTML.replace("{err}", '<p class="err">Sai token</p>'), status_code=401
+            _login_html("Token không đúng. Kiểm tra lại rồi thử lại."), status_code=401
         )
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(

@@ -9,7 +9,7 @@ const GLOSS_CATS = [
   { id: "skills",     label: "Pháp thuật / Kỹ năng", icon: "zap" },
 ];
 
-function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtracting }) {
+function GlossaryScreen({ glossary, status = "ready", onReload, onAdd, onEdit, onDelete, onExtract, isExtracting }) {
   const [cat, setCat] = useStateG("characters");
   const [q, setQ] = useStateG("");
   const [showAdd, setShowAdd] = useStateG(false);
@@ -57,6 +57,7 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
           <button
             key={g.id}
             className={`glossary-tab ${cat === g.id ? "active" : ""}`}
+            aria-pressed={cat === g.id}
             onClick={() => setCat(g.id)}
           >
             <Icon name={g.icon} size={13} />
@@ -65,12 +66,8 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
           </button>
         ))}
 
-        <div style={{
-          padding: "16px 16px 12px", margin: "12px 8px",
-          background: "var(--bg-elevated)", border: "1px solid var(--border)",
-          borderRadius: 6,
-        }}>
-          <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 8 }}>
+        <div className="card gloss-extract" style={{ padding: "16px 16px 12px", margin: "12px 8px" }}>
+          <div className="gloss-extract-desc" style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 8 }}>
             Trích xuất tự động thuật ngữ mới từ các chương đã dịch.
           </div>
           <button
@@ -82,9 +79,6 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
             <Icon name="sparkles" size={12} />
             {isExtracting ? "Đang trích xuất…" : "Trích xuất từ AI"}
           </button>
-          <div style={{ fontSize: 10, color: "var(--fg-5)", marginTop: 6, fontFamily: "var(--font-mono)" }}>
-            +12 thuật ngữ từ batch trước
-          </div>
         </div>
       </aside>
 
@@ -92,17 +86,20 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
         <div className="gloss-toolbar">
           <input
             className="input-field"
+            type="search"
+            aria-label="Tìm thuật ngữ"
             placeholder={`Tìm trong ${GLOSS_CATS.find(c => c.id === cat).label.toLowerCase()}…`}
             value={q}
             onChange={e => setQ(e.target.value)}
-            style={{ width: 280 }}
+            style={{ width: 280, maxWidth: "100%" }}
           />
-          <span style={{ fontSize: 11, color: "var(--fg-5)" }}>
+          <span style={{ fontSize: 11, color: "var(--fg-4)" }}>
             {items.length} / {(glossary[cat] || []).length} thuật ngữ
           </span>
           <div style={{ flex: 1 }} />
           <button
             className={`btn ${showAdd ? "primary" : "ghost"} sm`}
+            aria-expanded={showAdd}
             onClick={() => setShowAdd(s => !s)}
           >
             <Icon name="plus" size={13} /> Thêm thuật ngữ
@@ -111,12 +108,12 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
 
         {showAdd && (
           <div className="gloss-add-row">
-            <input className="input-field" placeholder="Tiếng Trung"
+            <input className="input-field" placeholder="Tiếng Trung" aria-label="Tiếng Trung"
               value={zh} onChange={e => setZh(e.target.value)} style={{ width: 140 }} />
-            <span style={{ color: "var(--fg-5)" }}>→</span>
-            <input className="input-field" placeholder="Tiếng Việt"
+            <span aria-hidden="true" style={{ color: "var(--fg-4)" }}>→</span>
+            <input className="input-field" placeholder="Tiếng Việt" aria-label="Tiếng Việt"
               value={vi} onChange={e => setVi(e.target.value)} style={{ width: 200 }} />
-            <input className="input-field" placeholder="Ghi chú"
+            <input className="input-field" placeholder="Ghi chú" aria-label="Ghi chú"
               value={notes} onChange={e => setNotes(e.target.value)} style={{ flex: 1 }} />
             <button className="btn primary sm" disabled={!zh || !vi}
               onClick={() => {
@@ -144,25 +141,25 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
                 isEditing(it) ? (
                   <tr key={i} className="gloss-editing">
                     <td>
-                      <input className="input-field" value={ez}
+                      <input className="input-field" value={ez} aria-label="Tiếng Trung"
                         onChange={e => setEz(e.target.value)} style={{ width: "100%" }} />
                     </td>
                     <td>
-                      <input className="input-field" value={ev}
+                      <input className="input-field" value={ev} aria-label="Tiếng Việt"
                         onChange={e => setEv(e.target.value)} style={{ width: "100%" }} />
                     </td>
                     <td>
-                      <input className="input-field" value={en}
+                      <input className="input-field" value={en} aria-label="Ghi chú"
                         onChange={e => setEn(e.target.value)}
                         onKeyDown={e => { if (e.key === "Enter" && ez && ev) saveEdit(); if (e.key === "Escape") setEditing(null); }}
                         style={{ width: "100%" }} />
                     </td>
                     <td>
                       <div style={{ display: "flex", gap: 4 }}>
-                        <button className="icon-btn" title="Lưu" disabled={!ez || !ev} onClick={saveEdit}>
+                        <button className="icon-btn" title="Lưu" aria-label="Lưu thuật ngữ" disabled={!ez || !ev} onClick={saveEdit}>
                           <Icon name="check" size={13} />
                         </button>
-                        <button className="icon-btn" title="Huỷ" onClick={() => setEditing(null)}>
+                        <button className="icon-btn" title="Huỷ" aria-label="Huỷ sửa" onClick={() => setEditing(null)}>
                           <Icon name="cross" size={13} />
                         </button>
                       </div>
@@ -175,10 +172,10 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
                     <td className="notes">{it.notes}</td>
                     <td>
                       <div style={{ display: "flex", gap: 4 }}>
-                        <button className="icon-btn" title="Sửa" onClick={() => startEdit(it)}>
+                        <button className="icon-btn" title="Sửa" aria-label={`Sửa thuật ngữ ${it.zh}`} onClick={() => startEdit(it)}>
                           <Icon name="edit" size={13} />
                         </button>
-                        <button className="icon-btn" title="Xoá"
+                        <button className="icon-btn" title="Xoá" aria-label={`Xoá thuật ngữ ${it.zh}`}
                           onClick={() => { if (confirm(`Xoá thuật ngữ "${it.zh} → ${it.vi}"?`)) onDelete(cat, it); }}>
                           <Icon name="cancel" size={13} />
                         </button>
@@ -188,8 +185,36 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
                 )
               ))}
               {items.length === 0 && (
-                <tr><td colSpan={4} style={{ textAlign: "center", padding: 32, color: "var(--fg-4)" }}>
-                  Không tìm thấy thuật ngữ.
+                <tr><td colSpan={4} style={{ padding: 0 }}>
+                  {status === "loading" ? (
+                    <StatusBlock kind="loading" title="Đang tải thuật ngữ…" />
+                  ) : status === "error" ? (
+                    <StatusBlock
+                      kind="error"
+                      title="Không tải được thuật ngữ"
+                      desc={typeof navigator !== "undefined" && navigator.onLine === false
+                        ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                        : "Máy chủ không phản hồi. Thử lại sau giây lát."}
+                      actions={onReload && (
+                        <button className="btn sm" onClick={onReload}><Icon name="refresh" size={12} /> Thử lại</button>
+                      )}
+                    />
+                  ) : q ? (
+                    <StatusBlock
+                      kind="empty"
+                      title="Không tìm thấy thuật ngữ"
+                      actions={<button className="btn sm" onClick={() => setQ("")}>Xoá tìm kiếm</button>}
+                    />
+                  ) : (
+                    <StatusBlock
+                      kind="empty"
+                      title="Chưa có thuật ngữ trong nhóm này"
+                      desc="Thêm tay, bôi đen trong màn đối chiếu, hoặc trích xuất từ các chương đã dịch."
+                      actions={!showAdd && (
+                        <button className="btn sm" onClick={() => setShowAdd(true)}><Icon name="plus" size={12} /> Thêm thuật ngữ</button>
+                      )}
+                    />
+                  )}
                 </td></tr>
               )}
             </tbody>

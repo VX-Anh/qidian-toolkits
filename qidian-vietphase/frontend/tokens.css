@@ -1,11 +1,11 @@
 /* ──────────────────────────────────────────────────────────────────────────
-   TaleStack Design System — colors & type tokens
-   Dark-only, indigo-accented.
+   VietPhase — màu sắc và kiểu chữ cho giao diện sáng và tối.
    ────────────────────────────────────────────────────────────────────────── */
 
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Noto+Serif:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
+  color-scheme: dark;
   /* ── COLOR · NEUTRALS ────────────────────────────────────────────────── */
   --gray-50:  #f9fafb;
   --gray-100: #f3f4f6;
@@ -20,61 +20,100 @@
   --gray-950: #030712;
 
   /* ── COLOR · BRAND (indigo) ──────────────────────────────────────────── */
-  --indigo-300: #a5b4fc;
-  --indigo-400: #818cf8;
+  --indigo-300: var(--accent);
+  --indigo-400: var(--accent);
   --indigo-500: #6366f1;
   --indigo-600: #4f46e5;
   --indigo-700: #4338ca;
-  --indigo-900: #312e81;
-  --indigo-950: #1e1b4b;
+  --indigo-900: var(--accent-border);
+  --indigo-950: var(--accent-bg);
 
   /* ── COLOR · SEMANTIC HUES ───────────────────────────────────────────── */
-  --emerald-300: #6ee7b7;
-  --emerald-400: #34d399;
+  --emerald-300: var(--success);
+  --emerald-400: var(--success);
   --emerald-600: #059669;
-  --emerald-700: #047857;
-  --emerald-900: #052e16;
+  --emerald-700: var(--success-border);
+  --emerald-900: var(--success-bg);
 
-  --amber-300: #fcd34d;
-  --amber-400: #fbbf24;
+  --amber-300: var(--warn);
+  --amber-400: var(--warn);
   --amber-600: #d97706;
-  --amber-700: #b45309;
-  --amber-900: #451a03;
+  --amber-700: var(--warn-border);
+  --amber-900: var(--warn-bg);
 
-  --red-300: #fca5a5;
-  --red-400: #f87171;
-  --red-800: #991b1b;
-  --red-900: #450a0a;
+  --red-300: var(--danger);
+  --red-400: var(--danger);
+  --red-800: var(--danger-border);
+  --red-900: var(--danger-bg);
 
   /* ── COLOR · SEMANTIC ROLES ──────────────────────────────────────────── */
   --bg-app:       var(--gray-950);
   --bg-surface:   var(--gray-900);
   --bg-elevated:  var(--gray-800);
   --bg-input:     var(--gray-800);
+  --bg-hover:     #293548;
   --bg-overlay:   rgba(0, 0, 0, 0.6);
 
   --fg-1:         var(--gray-100);
   --fg-2:         var(--gray-200);
   --fg-3:         var(--gray-400);
-  --fg-4:         var(--gray-500);
-  --fg-5:         var(--gray-600);
+  --fg-4:         #a6afbd;
+  --fg-5:         #9ea8b8;
 
   --border:       var(--gray-800);
   --border-hover: var(--gray-700);
-  --border-focus: var(--indigo-500);
+  --border-focus: var(--accent);
+  --focus-ring:   #a5b4fc;
 
-  --accent:       var(--indigo-400);
+  --accent:       #a5b4fc;
   --accent-fill:  var(--indigo-600);
-  --accent-fill-hover: var(--indigo-500);
+  --accent-fill-hover: #5549e5;
+  --on-accent: #ffffff;
+  --accent-bg: #1e1b4b;
+  --accent-border: #5148a1;
+  --accent-hover-bg: #2b265e;
 
-  --success: var(--emerald-400);
-  --success-bg: var(--emerald-900);
-  --warn:    var(--amber-400);
-  --warn-bg: var(--amber-900);
-  --danger:  var(--red-400);
-  --danger-bg: var(--red-900);
+  --success: #34d399;
+  --success-bg: #052e16;
+  --warn:    #fbbf24;
+  --warn-bg: #451a03;
+  --danger:  #f87171;
+  --danger-bg: #450a0a;
 
-  --tint-accent: rgba(99, 102, 241, 0.05);
+  --success-border: #047857;
+  --success-fill: #047857;
+  --success-fill-hover: #08654d;
+  --warn-border: #b45309;
+  --danger-border: #991b1b;
+  --danger-fill: #991b1b;
+
+  --tint-accent: color-mix(in srgb, var(--accent) 7%, transparent);
+  --tint-warn: color-mix(in srgb, var(--warn) 8%, transparent);
+  --bg-image-stage: #0a0a0a;
+  --bg-image-paper: #ffffff;
+  --bg-image-label: #000000;
+  --fg-image-label: #ffffff;
+  --image-stage-stripe: rgba(255, 255, 255, 0.015);
+  --shadow-image: 0 4px 24px rgba(0, 0, 0, 0.6);
+
+  /* ── Bảng màu đọc độc lập với giao diện ─────────────────────────────── */
+  --reader-light-bg: #fcfaf6;
+  --reader-light-fg: #24252a;
+  --reader-light-muted: #585b65;
+  --reader-light-border: #ccc8bf;
+  --reader-light-accent: #4338ca;
+
+  --reader-sepia-bg: #f4ebd8;
+  --reader-sepia-fg: #342820;
+  --reader-sepia-muted: #635142;
+  --reader-sepia-border: #d3c2a6;
+  --reader-sepia-accent: #794126;
+
+  --reader-dark-bg: #141822;
+  --reader-dark-fg: #ebe9e5;
+  --reader-dark-muted: #a9aeb9;
+  --reader-dark-border: #424959;
+  --reader-dark-accent: #b3beff;
 
   /* ── RADII ───────────────────────────────────────────────────────────── */
   --radius-sm:   3px;
@@ -91,6 +130,8 @@
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px;
   --space-10: 40px; --space-12: 48px;
+  --tap-min: 44px;
+  --measure: 68ch;
 
   /* ── MOTION ──────────────────────────────────────────────────────────── */
   --dur-fast: 100ms;
@@ -102,6 +143,8 @@
   --font-ui:      'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-display: 'Newsreader', 'Source Serif Pro', Georgia, serif;
   --font-serif:   'Noto Serif', 'Times New Roman', Georgia, serif;
+  --font-reading-serif: 'Noto Serif', Georgia, 'Times New Roman', serif;
+  --font-reading-sans: system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* ── TYPE · SCALE ─────────────────────────────────────────────────────── */
@@ -113,6 +156,91 @@
 
   --tracking-wide:  0.05em;
   --tracking-wider: 0.08em;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #f6f7fb;
+  --bg-surface: #ffffff;
+  --bg-elevated: #eef0f6;
+  --bg-input: #ffffff;
+  --bg-hover: #e4e8f1;
+
+  --fg-1: #172033;
+  --fg-2: #293247;
+  --fg-3: #414c63;
+  --fg-4: #505a70;
+  --fg-5: #555f74;
+
+  --border: #c6cddd;
+  --border-hover: #929eb4;
+  --focus-ring: #4338ca;
+  --accent: #4338ca;
+  --accent-fill-hover: #4338ca;
+  --accent-bg: #e8eaff;
+  --accent-border: #a3abdf;
+  --accent-hover-bg: #dce0ff;
+
+  --success: #146044;
+  --success-bg: #e3f5eb;
+  --warn: #79430a;
+  --warn-bg: #fff0d7;
+  --danger: #a52231;
+  --danger-bg: #fce9ec;
+
+  --shadow-toast: 0 4px 12px rgba(23, 32, 51, 0.18);
+  --shadow-modal: 0 10px 40px rgba(23, 32, 51, 0.24);
+}
+
+/* Màu nhấn theo lựa chọn giao diện, dùng chung cho chữ, nút và nền chọn. */
+:root[data-accent="emerald"] {
+  --accent: #6ee7b7;
+  --accent-fill: #047857;
+  --accent-fill-hover: #08654d;
+  --accent-bg: #072f25;
+  --accent-border: #29775d;
+  --accent-hover-bg: #123b31;
+}
+:root[data-accent="amber"] {
+  --accent: #fcd34d;
+  --accent-fill: #92400e;
+  --accent-fill-hover: #9f4910;
+  --accent-bg: #382503;
+  --accent-border: #88621e;
+  --accent-hover-bg: #44300b;
+}
+:root[data-accent="rose"] {
+  --accent: #fda4af;
+  --accent-fill: #be123c;
+  --accent-fill-hover: #ce1945;
+  --accent-bg: #430f24;
+  --accent-border: #983c59;
+  --accent-hover-bg: #511a2f;
+}
+:root[data-theme="light"][data-accent="emerald"] {
+  --accent: #146044;
+  --accent-fill-hover: #08654d;
+  --accent-bg: #e3f5eb;
+  --accent-border: #8ab9a4;
+  --accent-hover-bg: #d3eee1;
+}
+:root[data-theme="light"][data-accent="amber"] {
+  --accent: #79430a;
+  --accent-fill-hover: #78350f;
+  --accent-bg: #fff0d7;
+  --accent-border: #c7a56c;
+  --accent-hover-bg: #f5e4c6;
+}
+:root[data-theme="light"][data-accent="rose"] {
+  --accent: #a52247;
+  --accent-bg: #fce9ef;
+  --accent-border: #d397a8;
+  --accent-hover-bg: #f8dce5;
+  --accent-fill-hover: #a52247;
 }
 
 html, body {

@@ -28,11 +28,29 @@ function TranslationView({
   const [pageIdx, setPageIdx] = useStateT(0);
 
   // ── fetched (static) data ──────────────────────────────────────────
-  const [sourceText, setSourceText] = useStateT("");
-  const [segments, setSegments] = useStateT(null);   // pre-translate segments
-  const [subCount, setSubCount] = useStateT(0);
-  const [images, setImages] = useStateT([]);         // OCR image URLs
-  const [outputText, setOutputText] = useStateT("");
+  const [sourceTextS, setSourceText] = useStateT("");
+  const [segmentsS, setSegments] = useStateT(null);   // pre-translate segments
+  const [subCountS, setSubCount] = useStateT(0);
+  const [imagesS, setImages] = useStateT([]);         // OCR image URLs
+  const [outputTextS, setOutputText] = useStateT("");
+  // Trạng thái tải bản gốc / bản dịch đã lưu: "loading" | "ready" | "error".
+  // Khi chưa "ready" thì không cho Sửa — tránh lưu bản nháp rỗng đè lên file thật.
+  const [srcStatusS, setSrcStatus] = useStateT("loading");
+  const [outStatusS, setOutStatus] = useStateT("ready");
+  const [reloadNonce, setReloadNonce] = useStateT(0);
+  // Dữ liệu trên thuộc lượt tải nào (chương + lần thử lại). Ngay khi đổi chương/thử lại,
+  // render đầu tiên đã coi là "đang tải" — không hiện hay cho sửa nội dung của lượt trước
+  // trong lúc chờ effect reset.
+  const [dataKey, setDataKey] = useStateT(null);
+  const viewKey = chapter ? `${chapter.filename}\n${reloadNonce}` : null;
+  const stale = dataKey !== viewKey;
+  const sourceText = stale ? "" : sourceTextS;
+  const segments = stale ? null : segmentsS;
+  const subCount = stale ? 0 : subCountS;
+  const images = stale ? [] : imagesS;
+  const outputText = stale ? "" : outputTextS;
+  const srcStatus = stale ? "loading" : srcStatusS;
+  const outStatus = stale ? (chapter?.status === "done" ? "loading" : "ready") : outStatusS;
 
   // ── run-OCR-on-existing-images state ───────────────────────────────
   const [ocrRunning, setOcrRunning] = useStateT(false);
@@ -44,9 +62,15 @@ function TranslationView({
   const ocrPollRef = useRefT(null);
   // Chương đang mở — response fetch về muộn của chương khác sẽ bị bỏ qua, tránh
   // hiện (rồi lỡ tay lưu) nội dung chương A dưới tên chương B.
+  // Thêm vào đó, mỗi lượt tải có số thứ tự riêng: mở 3 → 5 → 3 hay bấm «Thử lại» nhiều lần
+  // thì response của lượt cũ (cùng tên file) cũng bị bỏ.
   const currentFnRef = useRefT(null);
   currentFnRef.current = chapter?.filename ?? null;
   const isCurrent = (fn) => currentFnRef.current === fn;
+  const loadGenRef = useRefT(0);   // bản dịch, ảnh: tăng mỗi lần effect tải chương chạy
+  const srcGenRef = useRefT(0);    // bản gốc + phân đoạn: tăng mỗi lần loadSource chạy
+  const srcSaveSeqRef = useRefT(0); // lượt lưu bản gốc / bản dịch: chỉ kết quả của lượt mới nhất được áp
+  const outSaveSeqRef = useRefT(0);
 
   // Pane nào đang mở editor (chưa lưu) → hỏi trước khi đóng/chuyển chương.
   const editingRef = useRefT({});
@@ -66,26 +90,39 @@ function TranslationView({
     if (!chapter) return;
     const raw = chapter.filename;
     const fn = encodeURIComponent(raw);
+    const img = !!chapter.ocr_job_id;
+    const gen = ++srcGenRef.current;
+    const live = () => srcGenRef.current === gen && isCurrent(raw);
     fetch(`/api/chapters/${fn}/source`)
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d && isCurrent(raw)) setSourceText(d.content || ""); })
-      .catch(() => {});
+      .then(r => {
+        // 404 chỉ hợp lệ với chương ảnh chưa OCR (chưa có file gốc) → rỗng. Chương văn bản
+        // mất file gốc là lỗi, không được thành "ready" rồi cho sửa/lưu bản rỗng.
+        if (r.status === 404 && img) return { content: "" };
+        return r.ok ? r.json() : Promise.reject(new Error(String(r.status)));
+      })
+      .then(d => { if (live()) { setSourceText((d && d.content) || ""); setSrcStatus("ready"); } })
+      .catch(() => { if (live()) setSrcStatus(s => (s === "ready" ? s : "error")); });
     if (novelSlug) {
       fetch(`/api/chapters/${fn}/pretranslate?novel_slug=${encodeURIComponent(novelSlug)}`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d && isCurrent(raw)) { setSegments(d.segments || []); setSubCount(d.substitution_count || 0); } })
+        .then(d => { if (d && live()) { setSegments(d.segments || []); setSubCount(d.substitution_count || 0); } })
         .catch(() => {});
     }
-  }, [chapter?.filename, novelSlug]);
+  }, [chapter?.filename, chapter?.ocr_job_id, novelSlug]);
 
   useEffectT(() => {
     if (!chapter) return;
     const raw = chapter.filename;
     const fn = encodeURIComponent(raw);
+    const gen = ++loadGenRef.current;
+    const live = () => loadGenRef.current === gen && isCurrent(raw);
+    setDataKey(`${raw}\n${reloadNonce}`);
     setView(defaultView(isImage));
     setPageIdx(0);
     setSourceText(""); setSegments(null); setSubCount(0);
     setImages([]); setOutputText("");
+    setSrcStatus("loading");
+    setOutStatus(chapter.status === "done" ? "loading" : "ready");
     setOcrRunning(false); setOcrStatus(""); setOcrMenu(false);
     setOcrPage(0); setOcrTotal(0);
 
@@ -93,9 +130,9 @@ function TranslationView({
 
     if (chapter.status === "done") {
       fetch(`/api/chapters/${fn}/output`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d && isCurrent(raw)) setOutputText((d.content || "").replace(/\r\n/g, "\n")); })
-        .catch(() => {});
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+        .then(d => { if (live()) { setOutputText(((d && d.content) || "").replace(/\r\n/g, "\n")); setOutStatus("ready"); } })
+        .catch(() => { if (live()) setOutStatus("error"); });
     }
 
     if (chapter.ocr_job_id && novelSlug) {
@@ -103,7 +140,7 @@ function TranslationView({
       fetch(`/api/ocr/${encodeURIComponent(novelSlug)}/${encodeURIComponent(job)}/images`)
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-          if (d && d.images && isCurrent(raw)) {
+          if (d && d.images && live()) {
             setImages(d.images.map(n => `/api/ocr/${encodeURIComponent(novelSlug)}/${encodeURIComponent(job)}/images/${encodeURIComponent(n)}`));
           }
         })
@@ -115,7 +152,9 @@ function TranslationView({
       if (ocrEsRef.current) { ocrEsRef.current.close(); ocrEsRef.current = null; }
       if (ocrPollRef.current) { clearInterval(ocrPollRef.current); ocrPollRef.current = null; }
     };
-  }, [chapter?.filename]);
+  }, [chapter?.filename, reloadNonce]);
+
+  const retryLoad = () => setReloadNonce(n => n + 1);
 
   const runOcr = (engine) => {
     setOcrMenu(false);
@@ -247,13 +286,13 @@ function TranslationView({
   const translated = isStreaming ? (liveText || "") : (liveText || outputText);
 
   return (
-    <div className="tv-overlay">
+    <div className="tv-overlay" role="dialog" aria-modal="true" aria-label={`Đối chiếu chương ${chapter.chapter_num}`}>
       <div className="tv-head">
         <button className="btn ghost sm" onClick={guardedClose}>
           <Icon name="back" size={13} /> Danh sách
         </button>
-        <div style={{ width: 1, height: 16, background: "var(--border)" }} />
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-5)" }}>
+        <div aria-hidden="true" style={{ width: 1, height: 16, background: "var(--border)" }} />
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-4)" }}>
           {String(chapter.chapter_num).padStart(4, "0")}
         </span>
         <span style={{ fontWeight: 600, fontSize: 14, color: "var(--fg-1)" }}>
@@ -272,6 +311,7 @@ function TranslationView({
             className={`btn sm ${showGloss ? "" : "ghost"}`}
             onClick={() => setShowGloss(!showGloss)}
             title="Bật/tắt highlight thuật ngữ"
+            aria-pressed={showGloss}
           >
             <Icon name="hash" size={12} /> Glossary
           </button>
@@ -293,22 +333,21 @@ function TranslationView({
                 onClick={() => setOcrMenu(o => !o)}
                 disabled={ocrRunning || images.length === 0}
                 title="Chọn engine OCR"
+                aria-label="Chọn engine OCR"
+                aria-haspopup="menu"
+                aria-expanded={ocrMenu}
                 style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, marginLeft: 1, padding: "4px 5px" }}
               >
                 <Icon name="chevron" size={11} />
               </button>
               {ocrMenu && (
                 <>
-                  <div style={{ position: "fixed", inset: 0, zIndex: 41 }} onClick={() => setOcrMenu(false)} />
-                  <div style={{
-                    position: "absolute", top: "100%", right: 0, marginTop: 4, zIndex: 42,
-                    background: "var(--bg-surface)", border: "1px solid var(--border)",
-                    borderRadius: 6, boxShadow: "var(--shadow-modal)", minWidth: 210, padding: 4,
-                  }}>
-                    <button className="btn ghost sm" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => runOcr("paddle")}>
+                  <div aria-hidden="true" style={{ position: "fixed", inset: 0, zIndex: 41 }} onClick={() => setOcrMenu(false)} />
+                  <div className="menu-pop" role="menu" style={{ right: 0, zIndex: 42, minWidth: 210 }}>
+                    <button className="menu-item" role="menuitem" onClick={() => runOcr("paddle")}>
                       <Icon name="zap" size={12} color="var(--accent)" /> PaddleOCR (offline)
                     </button>
-                    <button className="btn ghost sm" style={{ width: "100%", justifyContent: "flex-start" }} onClick={() => runOcr("claude")}>
+                    <button className="menu-item" role="menuitem" onClick={() => runOcr("claude")}>
                       <Icon name="sparkles" size={12} /> OCR bằng AI (Claude)
                     </button>
                   </div>
@@ -316,11 +355,11 @@ function TranslationView({
               )}
             </div>
           )}
-          <div style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
-          <button className="btn ghost sm" onClick={guardedPrev} title="Chương trước (⌘←)">
+          <div aria-hidden="true" style={{ width: 1, height: 16, background: "var(--border)", margin: "0 4px" }} />
+          <button className="btn ghost sm" onClick={guardedPrev} title="Chương trước (⌘←)" aria-label="Chương trước">
             <Icon name="prev" size={13} />
           </button>
-          <button className="btn ghost sm" onClick={guardedNext} title="Chương sau (⌘→)">
+          <button className="btn ghost sm" onClick={guardedNext} title="Chương sau (⌘→)" aria-label="Chương sau">
             <Icon name="next" size={13} />
           </button>
           <button className="btn primary sm" onClick={onRetranslate} disabled={isStreaming}>
@@ -351,11 +390,18 @@ function TranslationView({
             ocrStatus={ocrStatus}
             ocrPage={ocrPage}
             ocrTotal={ocrTotal}
+            srcStatus={srcStatus}
+            onRetry={retryLoad}
             onAddTerm={onAddTerm}
             onEditingChange={onEditingChange}
             onSaveSource={async (text) => {
+              const raw = chapter.filename;
+              const gen = loadGenRef.current;          // lượt mở chương lúc bấm lưu
+              const seq = ++srcSaveSeqRef.current;     // lượt lưu mới nhất mới được áp
               const ok = await onSaveSource?.(text);
               if (ok === false) return false;
+              // Đã sang chương khác / mở lại chương (3 → 5 → 3) / có lượt lưu mới hơn → không áp.
+              if (!isCurrent(raw) || loadGenRef.current !== gen || srcSaveSeqRef.current !== seq) return true;
               setSourceText(text);
               loadSource();   // build lại pretranslate segments từ bản vừa lưu
               return true;
@@ -368,7 +414,20 @@ function TranslationView({
             chapter={chapter}
             translated={translated}
             isStreaming={isStreaming}
-            onSaveOutput={onSaveOutput}
+            outStatus={outStatus}
+            onRetry={retryLoad}
+            onSaveOutput={async (text) => {
+              const raw = chapter.filename;
+              const gen = loadGenRef.current;
+              const seq = ++outSaveSeqRef.current;
+              const ok = await onSaveOutput?.(text);
+              if (ok === false) return false;
+              if (isCurrent(raw) && loadGenRef.current === gen && outSaveSeqRef.current === seq) {
+                setOutputText(text);
+                setOutStatus("ready");
+              }
+              return true;
+            }}
             onEditingChange={onEditingChange}
           />
         )}
@@ -390,17 +449,17 @@ function ImagePane({ images, pageIdx, onPage }) {
           {images.length ? `Trang ${pageIdx + 1} / ${images.length}` : "—"}
         </span>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          <button className="btn ghost sm" onClick={() => onPage(Math.max(0, pageIdx - 1))} disabled={pageIdx === 0}>
+          <button className="btn ghost sm" onClick={() => onPage(Math.max(0, pageIdx - 1))} disabled={pageIdx === 0} aria-label="Trang trước">
             <Icon name="prev" size={12} />
           </button>
-          <button className="btn ghost sm" onClick={() => onPage(Math.min(images.length - 1, pageIdx + 1))} disabled={pageIdx >= images.length - 1}>
+          <button className="btn ghost sm" onClick={() => onPage(Math.min(images.length - 1, pageIdx + 1))} disabled={pageIdx >= images.length - 1} aria-label="Trang sau">
             <Icon name="next" size={12} />
           </button>
           <div className="zoom-ctrl">
-            <button onClick={() => setZoom(z => Math.max(25, z - 10))}>−</button>
-            <span className="zoom-val">{zoom}%</span>
-            <button onClick={() => setZoom(z => Math.min(200, z + 10))}>+</button>
-            <button onClick={() => setZoom(100)} title="Reset" style={{ borderLeft: "1px solid var(--border)", padding: "3px 6px" }}>
+            <button onClick={() => setZoom(z => Math.max(25, z - 10))} aria-label="Thu nhỏ ảnh">−</button>
+            <span className="zoom-val" aria-live="polite">{zoom}%</span>
+            <button onClick={() => setZoom(z => Math.min(200, z + 10))} aria-label="Phóng to ảnh">+</button>
+            <button onClick={() => setZoom(100)} title="Về 100%" aria-label="Về cỡ ảnh 100%" style={{ borderLeft: "1px solid var(--border)", padding: "3px 6px" }}>
               <Icon name="refresh" size={11} />
             </button>
           </div>
@@ -411,20 +470,23 @@ function ImagePane({ images, pageIdx, onPage }) {
           {url ? (
             <img src={url} alt={`Trang ${pageIdx + 1}`} style={{ width: `${zoom}%`, height: "auto" }} />
           ) : (
-            <span style={{ color: "var(--fg-5)", fontSize: 12 }}>Không có ảnh.</span>
+            <StatusBlock kind="empty" title="Không có ảnh." />
           )}
         </div>
         {images.length > 0 && (
           <div className="filmstrip">
             {images.map((p, i) => (
-              <div
+              <button
+                type="button"
                 key={i}
                 className={`film-thumb ${i === pageIdx ? "active" : ""}`}
                 onClick={() => onPage(i)}
+                aria-label={`Trang ${i + 1}`}
+                aria-current={i === pageIdx ? "true" : undefined}
               >
                 <img src={p} alt="" />
-                <span className="pg-num">{i + 1}</span>
-              </div>
+                <span className="pg-num" aria-hidden="true">{i + 1}</span>
+              </button>
             ))}
           </div>
         )}
@@ -434,7 +496,7 @@ function ImagePane({ images, pageIdx, onPage }) {
 }
 
 // ── OCR / source pane (middle) ─────────────────────────────────────────
-function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight, chapter, ocrRunning, ocrStatus, ocrPage, ocrTotal, onAddTerm, onSaveSource, onEditingChange }) {
+function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight, chapter, ocrRunning, ocrStatus, ocrPage, ocrTotal, srcStatus = "ready", onRetry, onAddTerm, onSaveSource, onEditingChange }) {
   // Default ON: show the source with glossary proper-nouns pre-replaced to
   // Vietnamese (the "VietPhase" step that runs before AI translation) — this
   // matches the panel's purpose ("Bản gốc đã thay tên").
@@ -447,7 +509,11 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
   const bodyRef = useRefT(null);
 
   // Reset editor + selection state whenever the chapter changes.
-  useEffectT(() => { setEditing(false); setSel(null); setAdding(null); }, [chapter?.filename]);
+  // Chương của lượt lưu đang chạy: lưu xong mà đã sang chương khác thì không đụng editor mới.
+  // Lượt sửa: tăng khi đổi chương, mở/huỷ editor. Kết quả lưu về muộn của lượt cũ bị bỏ,
+  // không đóng editor hay ghi đè bản nháp của chương/lượt sửa mới.
+  const sessRef = useRefT(0);
+  useEffectT(() => { sessRef.current++; setEditing(false); setDraft(""); setSaving(false); setSel(null); setAdding(null); }, [chapter?.filename]);
 
   // Dismiss the selection popover on an outside click.
   useEffectT(() => {
@@ -460,13 +526,16 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
     return () => document.removeEventListener("mousedown", clear);
   }, [sel]);
 
-  const enterEdit = () => { setDraft(sourceText || ""); setEditing(true); setSel(null); };
+  const enterEdit = () => { sessRef.current++; setDraft(sourceText || ""); setEditing(true); setSaving(false); setSel(null); };
+  const cancelEdit = () => { sessRef.current++; setEditing(false); setSaving(false); };
   const [saving, setSaving] = useStateT(false);
   useEffectT(() => { onEditingChange?.("source", editing); }, [editing]);
   useEffectT(() => () => onEditingChange?.("source", false), []);
   const commitEdit = async () => {
+    const sess = sessRef.current;
     setSaving(true);
     const ok = await onSaveSource?.(draft);
+    if (sessRef.current !== sess) return;  // lượt sửa đã đổi (sang chương khác, huỷ, mở lại)
     setSaving(false);
     if (ok !== false) setEditing(false);   // lỗi → giữ editor + bản nháp
   };
@@ -497,26 +566,28 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
   return (
     <div className={`tv-pane ${isImage ? "ocr" : "zh"}`}>
       <div className="tv-pane-h">
-        <span className="label">{isImage ? "Kết quả OCR" : "Bản gốc 中"}</span>
+        <span className="label">{isImage ? "Kết quả OCR" : "Bản gốc (tiếng Trung)"}</span>
         {editing && <span className="editor-dirty-dot" title="Có thay đổi chưa lưu" />}
-        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-5)", fontFamily: "var(--font-mono)" }}>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
           {(editing ? draft.length : charCount)} ký tự
         </span>
         {editing ? (
           <>
             <button className="btn success sm" onClick={commitEdit} disabled={saving}><Icon name="save" size={11} /> {saving ? "Đang lưu…" : "Lưu"}</button>
-            <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
+            <button className="btn ghost sm" onClick={cancelEdit}>Hủy</button>
           </>
         ) : (
           <>
             <button
               className={`btn ${phased ? "primary" : ""} sm`}
               onClick={() => setPhased(p => !p)}
+              aria-pressed={phased}
               title="Thay thuật ngữ glossary (Hán → Việt) trong văn bản gốc trước khi gửi cho AI dịch"
             >
               <Icon name="sparkles" size={11} /> VietPhase trước
             </button>
-            <button className="btn ghost sm" onClick={enterEdit} title="Sửa nội dung bản gốc">
+            <button className="btn ghost sm" onClick={enterEdit} disabled={srcStatus !== "ready"}
+              title={srcStatus === "ready" ? "Sửa nội dung bản gốc" : "Chưa tải xong bản gốc"}>
               <Icon name="edit" size={11} /> Sửa
             </button>
           </>
@@ -549,8 +620,8 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
       )}
 
       {ocrRunning && !editing && (
-        <div className="phase-bar" style={{ background: "linear-gradient(90deg, var(--indigo-950), transparent)", flexWrap: "wrap" }}>
-          <span className="spin">⟳</span>
+        <div className="phase-bar" role="status" style={{ background: "linear-gradient(90deg, var(--accent-bg), transparent)", flexWrap: "wrap" }}>
+          <span className="spin" aria-hidden="true">⟳</span>
           <OcrProgress page={ocrPage || 0} total={ocrTotal || 0} width={120} />
           <span style={{ flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-4)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {ocrStatus || "Đang OCR…"}
@@ -573,14 +644,25 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
           style={isImage ? { flex: 1, overflowY: "auto" } : null}
           onMouseUp={onBodyMouseUp}
         >
-          {!sourceText && !ocrRunning ? (
-            <div style={{ color: "var(--fg-4)", fontSize: 13, fontStyle: "italic" }}>
-              {isImage
-                ? "Chưa có text OCR cho chương này. Bấm “Chạy OCR” ở thanh trên để nhận dạng từ ảnh."
-                : "Không có nội dung gốc."}
-            </div>
+          {srcStatus === "loading" && !sourceText ? (
+            <StatusBlock kind="loading" title="Đang tải bản gốc…" />
+          ) : srcStatus === "error" && !sourceText ? (
+            <StatusBlock
+              kind="error"
+              title="Không tải được bản gốc"
+              desc={typeof navigator !== "undefined" && navigator.onLine === false
+                ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                : "Máy chủ không trả về nội dung. Thử lại sau giây lát."}
+              actions={<button className="btn sm" onClick={onRetry}><Icon name="refresh" size={12} /> Thử lại</button>}
+            />
           ) : ocrStatus && ocrStatus.startsWith("Lỗi") ? (
-            <div style={{ color: "var(--red-400)", fontSize: 13 }}>{ocrStatus}</div>
+            <StatusBlock kind="error" title="OCR không thành công" desc={ocrStatus} />
+          ) : !sourceText && !ocrRunning ? (
+            <StatusBlock
+              kind="empty"
+              title={isImage ? "Chưa có text OCR" : "Không có nội dung gốc"}
+              desc={isImage ? "Bấm “Chạy OCR” ở thanh trên để nhận dạng từ ảnh." : null}
+            />
           ) : (
             <SourceText
               segments={segments}
@@ -609,29 +691,38 @@ function OcrPane({ isImage, sourceText, segments, subCount, glossary, highlight,
 }
 
 // ── Vietnamese translation pane (right) ────────────────────────────────
-function ViPane({ chapter, translated, isStreaming, onSaveOutput, onEditingChange }) {
+function ViPane({ chapter, translated, isStreaming, outStatus = "ready", onRetry, onSaveOutput, onEditingChange }) {
   const [override, setOverride] = useStateT(null); // local saved edit
   const [editing, setEditing] = useStateT(false);
   const [draft, setDraft] = useStateT("");
 
-  useEffectT(() => { setOverride(null); setEditing(false); }, [chapter?.filename]);
+  const sessRef = useRefT(0);   // lượt sửa, xem OcrPane
+  useEffectT(() => { sessRef.current++; setOverride(null); setEditing(false); setDraft(""); setSaving(false); }, [chapter?.filename]);
+  // Bản dịch nguồn đổi (tải lại, lưu xong) → bỏ bản ghi đè cục bộ.
+  useEffectT(() => { setOverride(null); }, [translated]);
 
   const display = override != null ? override : translated;
+  // Bản dịch đã lưu chưa tải xong / tải lỗi (và không có stream): không cho sửa/sao chép.
+  const outBlocked = !isStreaming && override == null && !display && outStatus !== "ready";
 
   const copyToClipboard = () => {
     if (!display) return;
     navigator.clipboard.writeText(display).catch(() => {});
   };
-  const enterEdit = () => { setDraft(display || ""); setEditing(true); };
+  const enterEdit = () => { sessRef.current++; setDraft(display || ""); setEditing(true); setSaving(false); };
+  const cancelEdit = () => { sessRef.current++; setEditing(false); setSaving(false); };
   const [saving, setSaving] = useStateT(false);
   useEffectT(() => { onEditingChange?.("output", editing); }, [editing]);
   useEffectT(() => () => onEditingChange?.("output", false), []);
   const commitEdit = async () => {
+    const sess = sessRef.current;
+    const text = draft;
     setSaving(true);
-    const ok = await onSaveOutput?.(draft);
+    const ok = await onSaveOutput?.(text);
+    if (sessRef.current !== sess) return;   // lượt sửa đã đổi: không gán bản nháp này cho editor mới
     setSaving(false);
     if (ok === false) return;               // lỗi → giữ editor + bản nháp
-    setOverride(draft);
+    setOverride(text);
     setEditing(false);
   };
 
@@ -642,20 +733,21 @@ function ViPane({ chapter, translated, isStreaming, onSaveOutput, onEditingChang
         {editing && <span className="editor-dirty-dot" title="Có thay đổi chưa lưu" />}
         {isStreaming && (
           <span className="badge in_progress" style={{ marginLeft: 8 }}>
-            <span className="spin" style={{ marginRight: 2 }}>⟳</span> Đang dịch…
+            <span className="spin" aria-hidden="true" style={{ marginRight: 2 }}>⟳</span> Đang dịch…
           </span>
         )}
         {editing ? (
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <button className="btn success sm" onClick={commitEdit} disabled={saving}><Icon name="save" size={11} /> {saving ? "Đang lưu…" : "Lưu"}</button>
-            <button className="btn ghost sm" onClick={() => setEditing(false)}>Hủy</button>
+            <button className="btn ghost sm" onClick={cancelEdit}>Hủy</button>
           </div>
         ) : (
           <>
-            <button className="btn ghost sm" onClick={copyToClipboard} style={{ marginLeft: "auto" }}>
+            <button className="btn ghost sm" onClick={copyToClipboard} disabled={!display} style={{ marginLeft: "auto" }}>
               <Icon name="copy" size={11} /> Sao chép
             </button>
-            <button className="btn ghost sm" onClick={enterEdit} disabled={isStreaming} title="Sửa bản dịch">
+            <button className="btn ghost sm" onClick={enterEdit} disabled={isStreaming || outBlocked}
+              title={outBlocked ? "Chưa tải xong bản dịch" : "Sửa bản dịch"}>
               <Icon name="edit" size={11} /> Sửa
             </button>
           </>
@@ -671,20 +763,31 @@ function ViPane({ chapter, translated, isStreaming, onSaveOutput, onEditingChang
         />
       ) : (
         <div className="tv-pane-body">
-          {!display && !isStreaming && (
-            <span style={{ color: "var(--fg-4)", fontStyle: "italic", fontSize: 13 }}>
-              Chương chưa được dịch. Nhấn “Dịch lại” để bắt đầu.
-            </span>
+          {!display && !isStreaming && outStatus === "loading" && (
+            <StatusBlock kind="loading" title="Đang tải bản dịch…" />
+          )}
+          {!display && !isStreaming && outStatus === "error" && (
+            <StatusBlock
+              kind="error"
+              title="Không tải được bản dịch"
+              desc={typeof navigator !== "undefined" && navigator.onLine === false
+                ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                : "File bản dịch không đọc được hoặc máy chủ lỗi."}
+              actions={<button className="btn sm" onClick={onRetry}><Icon name="refresh" size={12} /> Thử lại</button>}
+            />
+          )}
+          {!display && !isStreaming && outStatus === "ready" && (
+            <StatusBlock kind="empty" title="Chương chưa được dịch" desc="Nhấn “Dịch lại” để bắt đầu." />
           )}
           {!display && isStreaming && (
             <span style={{ color: "var(--fg-4)", fontStyle: "italic", fontSize: 13 }}>
-              Đang khởi tạo bản dịch…<span className="caret" style={{ color: "var(--accent)" }}>▍</span>
+              Đang khởi tạo bản dịch…<span className="caret" aria-hidden="true" style={{ color: "var(--accent)" }}>▍</span>
             </span>
           )}
           {display && (
             <span style={{ whiteSpace: "pre-wrap" }}>
               {display}
-              {isStreaming && <span className="caret" style={{ color: "var(--accent)" }}>▍</span>}
+              {isStreaming && <span className="caret" aria-hidden="true" style={{ color: "var(--accent)" }}>▍</span>}
             </span>
           )}
         </div>
@@ -729,21 +832,21 @@ function AddTermForm({ zh, x, y, onSubmit, onCancel }) {
       <h4><Icon name="hash" size={12} color="var(--accent)" /> Thêm thuật ngữ vào glossary</h4>
       <div className="seg">
         {TERM_CATS.map(c => (
-          <button key={c.id} className={cat === c.id ? "on" : ""} onClick={() => setCat(c.id)}>
+          <button key={c.id} type="button" className={cat === c.id ? "on" : ""} aria-pressed={cat === c.id} onClick={() => setCat(c.id)}>
             <Icon name={c.icon} size={11} /> {c.label}
           </button>
         ))}
       </div>
       <div className="row">
-        <input className="input-field" value={z} onChange={e => setZ(e.target.value)}
-          style={{ width: 110, fontFamily: "var(--font-mono)" }} placeholder="中" />
+        <input className="input-field" value={z} onChange={e => setZ(e.target.value)} aria-label="Thuật ngữ tiếng Trung"
+          style={{ width: 110, fontFamily: "var(--font-mono)" }} placeholder="Chữ Hán" />
         <span className="arrow">→</span>
         <input ref={viRef} className="input-field" value={vi} onChange={e => setVi(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }}
-          style={{ flex: 1 }} placeholder="Tiếng Việt" />
+          style={{ flex: 1 }} placeholder="Tiếng Việt" aria-label="Nghĩa tiếng Việt" />
       </div>
       <input className="input-field" value={notes} onChange={e => setNotes(e.target.value)}
-        placeholder="Ghi chú (tuỳ chọn)"
+        placeholder="Ghi chú (tuỳ chọn)" aria-label="Ghi chú"
         onKeyDown={e => { if (e.key === "Enter") submit(); if (e.key === "Escape") onCancel(); }} />
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
         <button className="btn ghost sm" onClick={onCancel}>Hủy</button>
@@ -819,29 +922,15 @@ function SourceText({ segments, rawText, glossary, highlight, phased = false, sh
 
 function SegControl({ value, onChange, options }) {
   return (
-    <div style={{
-      display: "inline-flex",
-      background: "var(--bg-elevated)",
-      border: "1px solid var(--border)",
-      borderRadius: 6,
-      padding: 2,
-      gap: 2,
-    }}>
+    <div className="seg inline" role="group">
       {options.map(o => {
         const active = value === o.v;
         return (
           <button
             key={o.v}
+            type="button"
+            aria-pressed={active}
             onClick={() => onChange(o.v)}
-            style={{
-              padding: "4px 10px", borderRadius: 4,
-              fontSize: 11, fontWeight: 500,
-              background: active ? "var(--bg-app)" : "transparent",
-              color: active ? "var(--fg-1)" : "var(--fg-3)",
-              border: 0,
-              display: "inline-flex", alignItems: "center", gap: 4,
-              fontFamily: "inherit",
-            }}
           >
             <Icon name={o.icon} size={11} />
             {o.lbl}

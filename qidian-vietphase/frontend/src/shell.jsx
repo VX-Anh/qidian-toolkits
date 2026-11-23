@@ -15,7 +15,7 @@ function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk, 
         <div className="brand-mark">A</div>
         <div style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: 1 }}>
           <span className="brand-name">AI-Translate</span>
-          <span className="brand-sub">TaleStack · 中→Việt</span>
+          <span className="brand-sub">TaleStack · Trung → Việt</span>
         </div>
       </div>
 
@@ -28,28 +28,31 @@ function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk, 
         {novels.map(n => {
           const pct = n.total ? Math.round((n.done / n.total) * 100) : 0;
           return (
-            <div
+            <button
+              type="button"
               key={n.slug}
               className={`rail-item ${currentSlug === n.slug ? "active" : ""}`}
+              aria-current={currentSlug === n.slug ? "true" : undefined}
               onClick={() => onSelect(n.slug)}
+              style={{ width: "calc(100% - 12px)", textAlign: "left" }}
             >
-              <div className="ri-cover" style={{ fontFamily: "var(--font-mono)" }}>
+              <span className="ri-cover" style={{ fontFamily: "var(--font-mono)" }}>
                 {n.cover_glyph}
-              </div>
-              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-                <div className="ri-title">{n.vi_name}</div>
-                <div style={{
+              </span>
+              <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+                <span className="ri-title">{n.vi_name}</span>
+                <span style={{
                   fontSize: 10, color: "var(--fg-5)", fontFamily: "var(--font-mono)",
                   display: "flex", alignItems: "center", gap: 6,
                 }}>
                   <span>{n.done}/{n.total}</span>
-                  <div style={{ flex: 1, height: 2, background: "var(--bg-elevated)", borderRadius: 9999, overflow: "hidden" }}>
-                    <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)" }} />
-                  </div>
+                  <span style={{ flex: 1, height: 2, background: "var(--bg-elevated)", borderRadius: 9999, overflow: "hidden" }}>
+                    <span style={{ width: `${pct}%`, height: "100%", background: "var(--accent)" }} />
+                  </span>
                   <span>{pct}%</span>
-                </div>
-              </div>
-            </div>
+                </span>
+              </span>
+            </button>
           );
         })}
       </div>
@@ -58,11 +61,12 @@ function LeftRail({ novels, currentSlug, onSelect, onNew, onOpenCmdk, serverOk, 
         <span>Tiện ích</span>
       </div>
       <div style={{ padding: "4px 6px 8px" }}>
-        <div className="rail-item" onClick={onOpenCmdk} style={{ fontSize: 12 }}>
+        <button type="button" className="rail-item" onClick={onOpenCmdk}
+          style={{ fontSize: 12, width: "calc(100% - 12px)", textAlign: "left" }}>
           <Icon name="command" size={14} color="var(--fg-3)" />
           <span className="ri-title">Tìm & lệnh</span>
-          <span className="kbd">⌘K</span>
-        </div>
+          <span className="kbd" aria-hidden="true">⌘K</span>
+        </button>
       </div>
 
       <div className="rail-foot">
@@ -80,14 +84,14 @@ const TAB_DEFS = [
   { id: "chapters", label: "Chương",     icon: "list" },
   { id: "glossary", label: "Thuật ngữ",  icon: "hash" },
   { id: "wiki",     label: "Story-Wiki", icon: "book" },
-  { id: "output",   label: "Bản dịch",   icon: "bookOpen" },
+  { id: "output",   label: "Đọc",        icon: "bookOpen" },
   { id: "settings", label: "Cài đặt",    icon: "settings" },
 ];
 
 function TopBar({
   novel, active, onTab, onOpenCmdk,
   showActivity, onToggleActivity, isRunning,
-  tabCounts, onOpenRail,
+  tabCounts, onOpenRail, theme, onTheme,
 }) {
   return (
     <div className="topbar">
@@ -106,6 +110,8 @@ function TopBar({
           <button
             key={t.id}
             className={`tab-btn ${active === t.id ? "active" : ""}`}
+            aria-label={t.label}
+            aria-current={active === t.id ? "page" : undefined}
             onClick={() => onTab(t.id)}
           >
             <Icon name={t.icon} size={14} />
@@ -115,11 +121,18 @@ function TopBar({
         ))}
       </nav>
 
-      <button className="search-pill" onClick={onOpenCmdk}>
+      <button className="search-pill" onClick={onOpenCmdk} aria-label="Tìm chương, thuật ngữ">
         <Icon name="search" size={13} />
-        <span>Tìm chương, thuật ngữ…</span>
+        <span className="sp-text">Tìm chương, thuật ngữ…</span>
         <span className="kbd">⌘K</span>
       </button>
+
+      <select className="input-field theme-select" aria-label="Giao diện sáng tối" title="Giao diện: Hệ thống / Sáng / Tối"
+        value={theme} onChange={e => onTheme(e.target.value)}>
+        <option value="system">Hệ thống</option>
+        <option value="light">Sáng</option>
+        <option value="dark">Tối</option>
+      </select>
 
       <div className="desktop-only" style={{ display: "flex", gap: 4 }}>
         <IconBtn icon="activity" label="Hoạt động agent" active={showActivity} onClick={onToggleActivity}

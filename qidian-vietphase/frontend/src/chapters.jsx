@@ -3,7 +3,7 @@
 const { useState: useStateC, useEffect: useEffectC, useRef: useRefC, useMemo: useMemoC } = React;
 
 function ChaptersScreen({
-  chapters, isRunning, agents, showActivity,
+  chapters, chaptersStatus = "ready", onReloadChapters, isRunning, agents, showActivity,
   filter, onFilter,
   checked, onToggleCheck, onSelectAll, onClearSel,
   onTranslateAll, onTranslateSelected, onCancel, onRetry,
@@ -28,6 +28,8 @@ function ChaptersScreen({
   const checkedCount = Object.values(checked).filter(Boolean).length;
   const hasChecked = checkedCount > 0;
   const allVisibleChecked = visible.length > 0 && visible.every(c => checked[c.filename]);
+  const uploadRef = useRefC(null);
+  const filtering = filter.status !== "all" || !!filter.query;
 
   return (
     <div className="workbench" data-activity={showActivity ? "shown" : "hidden"}>
@@ -36,11 +38,12 @@ function ChaptersScreen({
         <div className="work-toolbar">
           {!hasChecked ? (
             <>
-              <button className="btn" onClick={() => document.getElementById("dummy-upload").click()}>
-                <Icon name="upload" size={14} /> Upload .txt
+              <button className="btn" onClick={() => uploadRef.current?.click()}>
+                <Icon name="upload" size={14} /> Tải lên .txt
               </button>
               <input
                 id="dummy-upload"
+                ref={uploadRef}
                 type="file"
                 multiple
                 accept=".txt"
@@ -66,13 +69,11 @@ function ChaptersScreen({
             <>
               <span className="chip accent">
                 {checkedCount} đã chọn
-                <button onClick={onClearSel} style={{ background: "none", border: 0, color: "inherit", marginLeft: 4, padding: 0, fontSize: 12 }}>✕</button>
+                <button className="chip-x" onClick={onClearSel} aria-label="Bỏ chọn tất cả" title="Bỏ chọn">✕</button>
               </span>
               <button className="btn primary" onClick={onTranslateSelected} disabled={isRunning}>
                 <Icon name="play" size={12} /> Dịch {checkedCount} chương
               </button>
-              <button className="btn ghost"><Icon name="download" size={13} /> Tải xuống</button>
-              <button className="btn ghost"><Icon name="more" size={14} /></button>
             </>
           )}
 
@@ -84,12 +85,15 @@ function ChaptersScreen({
 
           <div className="spacer" />
 
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="work-progress" style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 11, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
               {done} / {total}
             </span>
-            <div style={{ width: 140, height: 4, background: "var(--bg-elevated)", borderRadius: 9999, overflow: "hidden" }}>
-              <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)", transition: "width 0.3s" }} />
+            <div
+              role="progressbar" aria-label="Tiến độ dịch" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}
+              style={{ width: 140, height: 4, background: "var(--bg-elevated)", borderRadius: "var(--radius-pill)", overflow: "hidden" }}
+            >
+              <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)", transition: "width var(--dur-slow) var(--ease)" }} />
             </div>
             <span style={{ fontSize: 11, color: "var(--accent)", fontFamily: "var(--font-mono)", minWidth: 32, textAlign: "right" }}>
               {pct}%
@@ -99,9 +103,11 @@ function ChaptersScreen({
 
         {/* Filters */}
         <div className="work-filters">
-          <div style={{ position: "relative", flex: 1, maxWidth: 320 }}>
+          <div className="work-search" style={{ position: "relative", flex: 1, maxWidth: 320 }}>
             <input
               className="input-field"
+              type="search"
+              aria-label="Tìm chương"
               placeholder="Tìm theo số chương hoặc tên…"
               value={filter.query}
               onChange={e => onFilter({ ...filter, query: e.target.value })}
@@ -115,15 +121,15 @@ function ChaptersScreen({
           <StatusFilterPills filter={filter} onFilter={onFilter} chapters={chapters} />
 
           <div className="spacer" style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: "var(--fg-5)" }}>
+          <span style={{ fontSize: 11, color: "var(--fg-4)" }}>
             {visible.length} / {total} chương
           </span>
         </div>
 
         {/* OCR live banner */}
         {ocrBanner && ocrBanner.active && (
-          <div className="ocr-banner">
-            <span className="ocr-spinner" />
+          <div className="ocr-banner" role="status">
+            <span className="ocr-spinner" aria-hidden="true" />
             <span className="ocr-banner-title">{ocrBanner.title || "OCR đang xử lý"}</span>
             {(ocrBanner.total > 0 || ocrBanner.page != null) && (
               <OcrProgress page={ocrBanner.page || 0} total={ocrBanner.total || 0} />
@@ -143,6 +149,7 @@ function ChaptersScreen({
                 <th style={{ width: 32, paddingLeft: 20 }}>
                   <input
                     type="checkbox"
+                    aria-label="Chọn mọi chương đang hiện"
                     checked={allVisibleChecked}
                     onChange={() => allVisibleChecked ? onClearSel() : onSelectAll(visible)}
                   />
@@ -166,8 +173,36 @@ function ChaptersScreen({
                 />
               ))}
               {visible.length === 0 && (
-                <tr><td colSpan={7} style={{ textAlign: "center", padding: 40, color: "var(--fg-4)" }}>
-                  Không có chương nào khớp bộ lọc.
+                <tr><td colSpan={7} style={{ padding: 0 }}>
+                  {chaptersStatus === "loading" && total === 0 ? (
+                    <StatusBlock kind="loading" title="Đang tải danh sách chương…" />
+                  ) : chaptersStatus === "error" && total === 0 ? (
+                    <StatusBlock
+                      kind="error"
+                      title="Không tải được danh sách chương"
+                      desc={typeof navigator !== "undefined" && navigator.onLine === false
+                        ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                        : "Máy chủ không phản hồi. Thử lại sau giây lát."}
+                      actions={onReloadChapters && (
+                        <button className="btn sm" onClick={onReloadChapters}><Icon name="refresh" size={12} /> Thử lại</button>
+                      )}
+                    />
+                  ) : total === 0 ? (
+                    <StatusBlock
+                      kind="empty"
+                      title="Truyện chưa có chương nào"
+                      desc="Tải lên file .txt chương tiếng Trung, OCR ảnh, hoặc quét thư mục để bắt đầu."
+                      actions={<button className="btn sm" onClick={() => uploadRef.current?.click()}><Icon name="upload" size={12} /> Tải lên .txt</button>}
+                    />
+                  ) : (
+                    <StatusBlock
+                      kind="empty"
+                      title="Không có chương nào khớp bộ lọc"
+                      actions={filtering && (
+                        <button className="btn sm" onClick={() => onFilter({ ...filter, status: "all", query: "" })}>Xoá bộ lọc</button>
+                      )}
+                    />
+                  )}
                 </td></tr>
               )}
             </tbody>
@@ -197,7 +232,7 @@ function StatusFilterPills({ filter, onFilter, chapters }) {
   ];
 
   return (
-    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+    <div role="group" aria-label="Lọc theo trạng thái" style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
       {opts.map(o => {
         const active = filter.status === o.v;
         const count = counts[o.v] || 0;
@@ -205,20 +240,13 @@ function StatusFilterPills({ filter, onFilter, chapters }) {
         return (
           <button
             key={o.v}
+            type="button"
+            className="chip-btn"
+            aria-pressed={active}
             onClick={() => onFilter({ ...filter, status: o.v })}
-            style={{
-              padding: "4px 10px", borderRadius: 9999, fontSize: 11,
-              background: active ? "var(--indigo-950)" : "transparent",
-              color: active ? "var(--accent)" : "var(--fg-3)",
-              border: `1px solid ${active ? "var(--indigo-900)" : "var(--border)"}`,
-              fontFamily: "inherit", fontWeight: 500,
-              display: "inline-flex", alignItems: "center", gap: 4,
-            }}
           >
             {o.lbl}
-            <span style={{ color: active ? "var(--accent)" : "var(--fg-5)", fontFamily: "var(--font-mono)", fontSize: 10 }}>
-              {count}
-            </span>
+            <span className="count">{count}</span>
           </button>
         );
       })}
@@ -231,8 +259,8 @@ function ChapterRow({ ch, checked, onToggle, onOpen }) {
     <tr
       className={`row ${checked ? "selected" : ""} ${ch.status === "in_progress" ? "active" : ""}`}
     >
-      <td onClick={e => e.stopPropagation()}>
-        <input type="checkbox" checked={checked} onChange={onToggle} />
+      <td>
+        <input type="checkbox" checked={checked} onChange={onToggle} aria-label={`Chọn chương ${ch.chapter_num}`} />
       </td>
       <td className="ch-num">{String(ch.chapter_num).padStart(4, "0")}</td>
       <td className="ch-zh">
@@ -248,15 +276,15 @@ function ChapterRow({ ch, checked, onToggle, onOpen }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span className="ch-mini-stream">
               {ch.vi_title || "Đang khởi tạo bản dịch…"}
-              <span className="caret" style={{ color: "var(--accent)" }}>▍</span>
+              <span className="caret" aria-hidden="true" style={{ color: "var(--accent)" }}>▍</span>
             </span>
             <span style={{ fontSize: 10, color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
               {Math.round(ch.progress || 0)}%
             </span>
           </div>
         ) : ch.status === "failed" ? (
-          <span style={{ color: "var(--red-400)", fontSize: 12 }}>
-            <Icon name="alert" size={12} color="var(--red-400)" />
+          <span style={{ color: "var(--danger)", fontSize: 12, overflowWrap: "anywhere" }}>
+            <Icon name="alert" size={12} />
             <span style={{ marginLeft: 6 }}>{ch.error}</span>
           </span>
         ) : ch.vi_title ? (
@@ -274,22 +302,20 @@ function ChapterRow({ ch, checked, onToggle, onOpen }) {
       <td style={{ textAlign: "right" }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
           {ch.review_status === "needs_fix" && (
-            <span className="src-chip" style={{ background: "var(--amber-900)", color: "var(--amber-300)", border: "1px solid var(--amber-700)" }} title={ch.review_issues || "Cần sửa"}>
+            <span className="src-chip image" title={ch.review_issues || "Cần sửa"}>
               <Icon name="alert" size={9} /> Cần sửa
             </span>
           )}
           {ch.review_status === "ok" && (
-            <span style={{ color: "var(--emerald-400)", fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3 }}>
+            <span style={{ color: "var(--success)", fontSize: 11, display: "inline-flex", alignItems: "center", gap: 3 }}>
               <Icon name="check" size={11} /> OK
             </span>
           )}
           <button
+            className="link-btn"
             onClick={onOpen}
-            style={{
-              background: "none", border: 0, color: "var(--accent)",
-              fontSize: 11, cursor: "pointer", fontFamily: "inherit",
-              display: "inline-flex", alignItems: "center", gap: 4,
-            }}
+            aria-label={`${ch.status === "done" ? "Xem" : "Mở"} chương ${ch.chapter_num}`}
+            style={{ fontSize: 11 }}
           >
             <Icon name={ch.status === "done" ? "bookOpen" : "forward"} size={11} />
             {ch.status === "done" ? "Xem" : "Mở"}
@@ -307,7 +333,7 @@ function ActivityRail({ agents, isRunning }) {
       <div className="activity-h">
         <span className={`live-dot ${isRunning ? "" : "idle"}`} />
         <span className="label">Hoạt động agent</span>
-        <span style={{ fontSize: 10, color: "var(--fg-5)", fontFamily: "var(--font-mono)" }}>
+        <span style={{ fontSize: 10, color: "var(--fg-4)", fontFamily: "var(--font-mono)" }}>
           {agents.filter(a => a.state === "running").length}/{agents.length}
         </span>
       </div>
@@ -315,9 +341,7 @@ function ActivityRail({ agents, isRunning }) {
         {agents.map(a => <AgentCard key={a.id} agent={a} />)}
 
         {agents.length === 0 && !isRunning && (
-          <div style={{ padding: "24px 16px", textAlign: "center", fontSize: 11, color: "var(--fg-5)" }}>
-            Không có agent nào đang chạy.
-          </div>
+          <StatusBlock kind="empty" title="Không có agent nào đang chạy" />
         )}
       </div>
     </aside>
@@ -336,7 +360,7 @@ function AgentCard({ agent }) {
       <div className="agent-log">
         {agent.log.slice(-4).map((l, i) => (
           <div key={i} className={l.cls}>
-            <span style={{ marginRight: 4 }}>{l.sym}</span>{l.text}
+            <span aria-hidden="true" style={{ marginRight: 4 }}>{l.sym}</span>{l.text}
           </div>
         ))}
       </div>
@@ -361,12 +385,6 @@ function OcrUploadButton({ onUploadImages }) {
     inputRef.current?.click();
   };
 
-  const item = {
-    display: "flex", alignItems: "center", gap: 8, width: "100%",
-    padding: "8px 10px", background: "none", border: 0, color: "var(--fg-1)",
-    fontSize: 12, fontFamily: "inherit", borderRadius: 4, textAlign: "left", cursor: "pointer",
-  };
-
   return (
     <div style={{ position: "relative", display: "inline-flex" }}>
       <button
@@ -380,6 +398,9 @@ function OcrUploadButton({ onUploadImages }) {
       <button
         className="btn"
         title="Chọn engine OCR"
+        aria-label="Chọn engine OCR"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
         onClick={() => setMenuOpen(o => !o)}
         style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, marginLeft: 1, padding: "6px 6px" }}
       >
@@ -388,23 +409,15 @@ function OcrUploadButton({ onUploadImages }) {
 
       {menuOpen && (
         <>
-          <div style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setMenuOpen(false)} />
-          <div style={{
-            position: "absolute", top: "100%", left: 0, marginTop: 4, zIndex: 30,
-            background: "var(--bg-surface)", border: "1px solid var(--border)",
-            borderRadius: 6, boxShadow: "var(--shadow-modal)", minWidth: 230, padding: 4,
-          }}>
-            <button style={item} onClick={() => pick("paddle")}
-              onMouseEnter={e => e.currentTarget.style.background = "var(--bg-elevated)"}
-              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+          <div aria-hidden="true" style={{ position: "fixed", inset: 0, zIndex: 29 }} onClick={() => setMenuOpen(false)} />
+          <div className="menu-pop" role="menu" style={{ left: 0 }}>
+            <button className="menu-item" role="menuitem" onClick={() => pick("paddle")}>
               <Icon name="zap" size={13} color="var(--accent)" />
-              <span style={{ flex: 1 }}>PaddleOCR <span style={{ color: "var(--fg-5)" }}>· offline, mặc định</span></span>
+              <span style={{ flex: 1 }}>PaddleOCR <span className="muted">· offline, mặc định</span></span>
             </button>
-            <button style={item} onClick={() => pick("claude")}
-              onMouseEnter={e => e.currentTarget.style.background = "var(--bg-elevated)"}
-              onMouseLeave={e => e.currentTarget.style.background = "none"}>
+            <button className="menu-item" role="menuitem" onClick={() => pick("claude")}>
               <Icon name="sparkles" size={13} color="var(--fg-3)" />
-              <span style={{ flex: 1 }}>OCR bằng AI <span style={{ color: "var(--fg-5)" }}>· Claude vision</span></span>
+              <span style={{ flex: 1 }}>OCR bằng AI <span className="muted">· Claude vision</span></span>
             </button>
           </div>
         </>

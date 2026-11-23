@@ -18,6 +18,23 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showGlossInline": true
 }/*EDITMODE-END*/;
 
+// ── Favicon ───────────────────────────────────────────────────────────────────
+// Backend không phục vụ /favicon.ico → trình duyệt báo 404 trong console. Gắn icon
+// SVG nội tuyến (chữ "A" trên nền accent) nếu trang chưa khai báo icon.
+(function vpEnsureFavicon() {
+  try {
+    if (document.querySelector('link[rel~="icon"]')) return;
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+      + '<rect width="32" height="32" rx="7" fill="#4f46e5"/>'
+      + '<text x="16" y="22.5" font-family="Georgia,serif" font-size="19" font-weight="700" fill="#fff" text-anchor="middle">A</text></svg>';
+    const link = document.createElement("link");
+    link.rel = "icon";
+    link.type = "image/svg+xml";
+    link.href = "data:image/svg+xml," + encodeURIComponent(svg);
+    document.head.appendChild(link);
+  } catch { /* không có DOM — bỏ qua */ }
+})();
+
 // ── API helpers ───────────────────────────────────────────────────────────────
 // Lỗi HTTP kèm `detail` từ FastAPI; message vẫn bắt đầu bằng mã status (code cũ
 // kiểm tra kiểu startsWith("409")).
@@ -61,41 +78,105 @@ const api = {
 };
 
 // ── Hash routing ──────────────────────────────────────────────────────────────
-// URL có dạng  #/{novel_slug}/{tab}  để vào thẳng từng trang.
+// Màn đọc dùng #/{slug}/output/{chương}, thêm /doi-chieu khi mở đối chiếu.
 const VALID_TABS = ["chapters", "glossary", "wiki", "output", "settings"];
+
+// Đoạn hash mã hoá sai (vd "%E0%A4%A") làm decodeURIComponent ném URIError → coi như không có.
+function safeDecodeHashPart(s) {
+  if (!s) return null;
+  try { return decodeURIComponent(s); } catch { return null; }
+}
 
 function parseHash() {
   const parts = (location.hash || "").replace(/^#\/?/, "").split("/");
+  const tab = VALID_TABS.includes(parts[1]) ? parts[1] : "chapters";
+  const chapter = safeDecodeHashPart(parts[2]);
   return {
-    slug: parts[0] ? decodeURIComponent(parts[0]) : null,
-    tab: parts[1] || null,
-    chapter: parts[2] ? decodeURIComponent(parts[2]) : null,  // số chương
+    slug: safeDecodeHashPart(parts[0]),
+    tab,
+    readerChapter: tab === "output" ? chapter : null,
+    chapter: tab !== "output" || parts[3] === "doi-chieu" ? chapter : null,
   };
 }
 
-function buildHash(slug, tab, chapter) {
+function buildHash(slug, tab, chapter, readerChapter) {
   let h = `#/${encodeURIComponent(slug)}/${tab}`;
-  if (chapter != null && chapter !== "") h += `/${encodeURIComponent(chapter)}`;
+  const num = chapter ?? (tab === "output" ? readerChapter : null);
+  if (num != null) h += `/${encodeURIComponent(num)}`;
+  if (tab === "output" && chapter != null) h += "/doi-chieu";
   return h;
 }
 
+// Kiểu chữ đọc lưu riêng (setTweak chỉ báo cho host chỉnh thiết kế, không tự lưu).
+const FONT_READING_KEY = "vp:reader:font:v1";
+const FONT_READING_VALUES = ["serif", "sans"];
+function loadFontReading() {
+  try {
+    const v = localStorage.getItem(FONT_READING_KEY);
+    if (FONT_READING_VALUES.includes(v)) return v;
+  } catch { /* Bộ nhớ bị chặn → dùng mặc định. */ }
+  return TWEAK_DEFAULTS.fontReading;
+}
+const APP_TWEAK_INITIAL = { ...TWEAK_DEFAULTS, fontReading: loadFontReading() };
+
 function App() {
   // ── Tweaks ───────────────────────────────────────────────────────────
-  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [tweaks, setTweak] = useTweaks(APP_TWEAK_INITIAL);
+
+  // Kiểu chữ đọc: Tweaks và bảng "Aa" cùng sửa giá trị này; lưu localStorage để tải lại vẫn giữ.
+  const setFontReading = useCbA((value) => {
+    if (!FONT_READING_VALUES.includes(value)) return;
+    setTweak("fontReading", value);
+    try { localStorage.setItem(FONT_READING_KEY, value); } catch { /* Vẫn áp dụng trong phiên này. */ }
+  }, [setTweak]);
 
   useEffectA(() => {
     document.documentElement.setAttribute("data-accent", tweaks.accent);
     document.documentElement.setAttribute("data-density", tweaks.density);
   }, [tweaks.accent, tweaks.density]);
 
+  const [theme, setTheme] = useStateA(() => {
+    try {
+      const saved = localStorage.getItem("vp:theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch { /* Dùng giao diện hệ thống khi không đọc được tuỳ chọn. */ }
+    return "system";
+  });
+
+  useEffectA(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme = theme === "system"
+        ? (media.matches ? "dark" : "light") : theme;
+    };
+    apply();
+    if (theme !== "system") return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
+
+  function changeTheme(value) {
+    setTheme(value);
+    try { localStorage.setItem("vp:theme", value); } catch { /* Vẫn áp dụng trong phiên này. */ }
+  }
+
   // ── Core state ───────────────────────────────────────────────────────
   const [novels, setNovels] = useStateA([]);
   const [currentSlug, setCurrentSlug] = useStateA(null);
-  const [tab, setTab] = useStateA("chapters");
+  const [tab, setRouteTab] = useStateA("chapters");
+  const [readerChapter, setReaderChapter] = useStateA(null);
+  // Bản dịch vừa lưu trong overlay đối chiếu → màn đọc cập nhật nội dung chương đó.
+  const [savedOutput, setSavedOutput] = useStateA(null);   // { filename, content, n }
+  const [chaptersStatus, setChaptersStatus] = useStateA("loading");
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
+  const [glossaryStatus, setGlossaryStatus] = useStateA("loading");
+  const glossarySlugRef = useRefA(null);
+  const outSaveSeqRef = useRefA({});   // filename → lượt lưu bản dịch mới nhất (tính từ lúc gửi)   // glossary đang hiện thuộc truyện nào
   const [wikiEntities, setWikiEntities] = useStateA([]);
+  const [wikiStatus, setWikiStatus] = useStateA("loading");
   const [novelMd, setNovelMd] = useStateA("");
+  const [novelMdStatus, setNovelMdStatus] = useStateA("loading");
 
   const [isRunning, setIsRunning] = useStateA(false);
   const [checked, setChecked] = useStateA({});
@@ -112,8 +193,6 @@ function App() {
 
   const esRef = useRefA(null);
   const activeJobIdRef = useRefA(null);
-  const openChapterRef = useRefA(null);
-  useEffectA(() => { openChapterRef.current = openChapter; }, [openChapter]);
   // Luôn phản ánh truyện đang hiển thị — để guard SSE không nạp dữ liệu job cũ
   // vào truyện khác khi người dùng đổi truyện giữa lúc đang dịch.
   const currentSlugRef = useRefA(null);
@@ -125,6 +204,8 @@ function App() {
   const pendingChapterRef = useRefA(null);
   // Chương mở ở lần đồng bộ URL trước — để phân biệt "vừa mở" (push) vs còn lại (replace).
   const prevOpenRef = useRefA(null);
+  const syncedHashRef = useRefA(null);
+  const chapterRequestRef = useRefA(0);
 
   // ── Computed ─────────────────────────────────────────────────────────
   const currentNovel = useMemoA(() => {
@@ -167,9 +248,11 @@ function App() {
 
   // ── Data loading ─────────────────────────────────────────────────────
   async function loadChapters(slug) {
+    if (currentSlugRef.current !== slug) return;
+    const request = ++chapterRequestRef.current;
     try {
       const data = await api.get(`/api/chapters?novel_slug=${encodeURIComponent(slug)}`);
-      if (currentSlugRef.current !== slug) return;   // đã đổi truyện → bỏ response cũ
+      if (currentSlugRef.current !== slug || chapterRequestRef.current !== request) return;
       setChapters(prev => data.map(ch => {
         // Preserve any live progress already tracked in the UI
         const existing = prev.find(c => c.filename === ch.filename);
@@ -192,7 +275,10 @@ function App() {
           progress: ch.status === "in_progress" ? (existing?.progress || 50) : 0,
         };
       }));
+      setChaptersStatus("ready");
     } catch (err) {
+      if (currentSlugRef.current !== slug || chapterRequestRef.current !== request) return;
+      setChaptersStatus("error");
       setToast({ msg: `Lỗi tải chương: ${err.message}`, type: "error" });
     }
   }
@@ -201,13 +287,19 @@ function App() {
     try {
       const data = await api.get(`/api/novels/${encodeURIComponent(slug)}`);
       if (currentSlugRef.current !== slug) return;
+      glossarySlugRef.current = slug;
       setGlossary({
         characters: data.characters || [],
         places:     data.places     || [],
         realms:     data.realms     || [],
         skills:     data.skills     || [],
       });
-    } catch { /* ignore */ }
+      setGlossaryStatus("ready");
+    } catch {
+      // Nạp lại nền thất bại khi đã có dữ liệu của đúng truyện: giữ nguyên.
+      // Chưa có gì của truyện này → báo lỗi (không hiện như danh sách rỗng).
+      if (currentSlugRef.current === slug && glossarySlugRef.current !== slug) setGlossaryStatus("error");
+    }
   }
 
   // novel.md đang sửa trong Settings: nhớ nó thuộc truyện nào, version lúc tải, và
@@ -225,7 +317,11 @@ function App() {
       novelMdMeta.current = { slug, version: data.version ?? null, dirty: false };
       window.__vpSettingsDirty = false;
       setNovelMd(data.content || "");
-    } catch { /* ignore */ }
+      setNovelMdStatus("ready");
+    } catch {
+      // Lỗi nạp lại nền khi đã có bản tải trước đó: giữ nguyên, chỉ báo lỗi khi chưa có gì.
+      if (currentSlugRef.current === slug && novelMdMeta.current.slug !== slug) setNovelMdStatus("error");
+    }
   }
 
   function editNovelMd(value) {
@@ -248,7 +344,11 @@ function App() {
       const data = await api.get(`/api/wiki/${encodeURIComponent(slug)}/entities`);
       if (currentSlugRef.current !== slug) return;
       setWikiEntities(Array.isArray(data) ? data : []);
-    } catch { setWikiEntities([]); }
+      setWikiStatus("ready");
+    } catch {
+      // Giữ danh sách đang có (nạp lại nền khi đang dịch có thể lỗi tạm thời).
+      if (currentSlugRef.current === slug) setWikiStatus("error");
+    }
   }
 
   // Load novels on mount
@@ -268,11 +368,14 @@ function App() {
         setNovels(mapped);
         if (mapped.length > 0) {
           // Vào thẳng truyện/trang/chương theo URL nếu hợp lệ, nếu không lấy truyện đầu.
-          const { slug: hashSlug, tab: hashTab, chapter: hashChapter } = parseHash();
-          const slug = mapped.some(n => n.slug === hashSlug) ? hashSlug : mapped[0].slug;
+          const route = parseHash();
+          const slug = mapped.some(n => n.slug === route.slug) ? route.slug : mapped[0].slug;
           setCurrentSlug(slug);
-          if (hashTab && VALID_TABS.includes(hashTab)) setTab(hashTab);
-          if (hashChapter) pendingChapterRef.current = hashChapter;  // mở khi chương nạp xong
+          setRouteTab(route.tab);
+          if (slug === route.slug) {
+            setReaderChapter(route.readerChapter);
+            pendingChapterRef.current = route.chapter;
+          }
         }
       })
       .catch(err => setToast({ msg: `Lỗi tải danh sách truyện: ${err.message}`, type: "error" }));
@@ -284,15 +387,15 @@ function App() {
   //  • Còn lại    → replaceState (đổi tab/truyện/prev-next/đóng chương: không tạo rác history).
   useEffectA(() => {
     if (!currentSlug) return;
-    const chNum = openChapter ? openChapter.chapter_num : null;
-    const want = buildHash(currentSlug, tab, chNum);
-    if (location.hash === want) { prevOpenRef.current = openChapter; return; }
-
-    const justOpened = !prevOpenRef.current && openChapter;
-    if (justOpened) history.pushState(null, "", want);
-    else            history.replaceState(null, "", want);
+    const chNum = openChapter?.chapter_num ?? pendingChapterRef.current;
+    const want = buildHash(currentSlug, tab, chNum, readerChapter);
+    if (location.hash !== want) {
+      if (!prevOpenRef.current && openChapter) history.pushState(null, "", want);
+      else history.replaceState(null, "", want);
+    }
+    syncedHashRef.current = want;
     prevOpenRef.current = openChapter;
-  }, [currentSlug, tab, openChapter]);
+  }, [currentSlug, tab, openChapter, readerChapter]);
 
   // Mở chương đang chờ từ URL khi danh sách chương vừa nạp xong.
   useEffectA(() => {
@@ -305,19 +408,26 @@ function App() {
   // hash → state: back/forward hoặc sửa URL thủ công.
   useEffectA(() => {
     const onHash = () => {
-      const { slug, tab: t, chapter } = parseHash();
-      if (slug && slug !== currentSlugRef.current && novels.some(n => n.slug === slug)) {
-        selectNovel(slug);
+      if (!currentSlugRef.current) return;
+      const { slug, tab: nextTab, readerChapter: nextReaderChapter, chapter } = parseHash();
+      const changedNovel = slug && slug !== currentSlugRef.current && novels.some(n => n.slug === slug);
+      const ch = !changedNovel && chapter
+        ? chaptersRef.current.find(c => String(c.chapter_num) === chapter)
+        : null;
+      const rejected = changedNovel
+        ? !selectNovel(slug)
+        : window.__vpDirty && ch?.chapter_num !== prevOpenRef.current?.chapter_num
+          && !window.confirm("Đang sửa dở chưa lưu. Bỏ thay đổi?");
+      if (rejected) {
+        history.replaceState(null, "", syncedHashRef.current);
+        return;
       }
-      if (t && VALID_TABS.includes(t)) setTab(t);
-      // Mở/đóng chương theo URL.
-      if (chapter) {
-        const ch = chaptersRef.current.find(c => String(c.chapter_num) === String(chapter));
-        if (ch) setOpenChapter(ch);
-        else pendingChapterRef.current = chapter;  // đổi truyện xong sẽ mở
-      } else if (openChapterRef.current) {
-        setOpenChapter(null);
-      }
+      setRouteTab(nextTab);
+      setReaderChapter(nextReaderChapter);
+      pendingChapterRef.current = ch ? null : chapter;
+      setOpenChapter(ch || null);
+      // Trình duyệt đã tạo entry cho URL đang mở.
+      prevOpenRef.current = ch || null;
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -329,7 +439,9 @@ function App() {
     // Xoá dữ liệu truyện cũ ngay để không hiện/lưu nhầm trong lúc chờ tải.
     novelMdMeta.current = { slug: null, version: null, dirty: false };
     setNovelMd("");
-    setChapters([]);
+    setNovelMdStatus("loading");
+    setWikiStatus("loading");
+    if (glossarySlugRef.current !== currentSlug) setGlossaryStatus("loading");
     loadChapters(currentSlug);
     loadGlossary(currentSlug);
     loadNovelMd(currentSlug);
@@ -498,7 +610,7 @@ function App() {
 
   // ── File upload ──────────────────────────────────────────────────────
   async function handleUpload(files) {
-    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi upload!", type: "error" }); return; }
+    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi tải lên!", type: "error" }); return; }
     const txtFiles = [...files].filter(f => f.name.endsWith(".txt"));
     if (!txtFiles.length) { setToast({ msg: "Chỉ chấp nhận file .txt", type: "error" }); return; }
     const slug = currentSlug;   // giữ cố định: người dùng có thể đổi truyện trong lúc chờ
@@ -512,14 +624,14 @@ function App() {
       if (saved.length && currentSlugRef.current === slug) loadChapters(slug);
       if (errors.length) {
         setToast({
-          msg: `${saved.length ? `Đã upload ${saved.length} file. ` : ""}Lỗi ${errors.length} file: ${errors.join(" · ")}`,
+          msg: `${saved.length ? `Đã tải lên ${saved.length} file. ` : ""}Lỗi ${errors.length} file: ${errors.join(" · ")}`,
           type: "error",
         });
       } else if (saved.length) {
-        setToast({ msg: `Đã upload ${saved.length} file`, type: "success" });
+        setToast({ msg: `Đã tải lên ${saved.length} file`, type: "success" });
       }
     } catch (err) {
-      setToast({ msg: `Upload thất bại: ${err.message}`, type: "error" });
+      setToast({ msg: `Tải lên thất bại: ${err.message}`, type: "error" });
     }
   }
 
@@ -577,7 +689,7 @@ function App() {
   }
 
   async function handleUploadImages(files, engine = "paddle") {
-    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi upload ảnh!", type: "error" }); return; }
+    if (!currentSlug) { setToast({ msg: "Chọn truyện trước khi tải ảnh lên!", type: "error" }); return; }
     const imgs = [...files].filter(f => f.type.startsWith("image/"));
     if (!imgs.length) { setToast({ msg: "Chỉ chấp nhận file ảnh", type: "error" }); return; }
     const fd = new FormData();
@@ -593,7 +705,7 @@ function App() {
       setToast({ msg: `Đang OCR ${imgs.length} ảnh (${engineLabel})…`, type: "info" });
       streamOcrJob(job_id, `OCR ${imgs.length} ảnh · ${engineLabel}`, fd.get("novel_slug"));
     } catch (err) {
-      setToast({ msg: `Upload ảnh thất bại: ${err.message}`, type: "error" });
+      setToast({ msg: `Tải ảnh lên thất bại: ${err.message}`, type: "error" });
     }
   }
 
@@ -701,7 +813,13 @@ function App() {
 
   async function onSaveOutputText(filename, text) {
     try {
+      const seq = (outSaveSeqRef.current[filename] || 0) + 1;
+      outSaveSeqRef.current[filename] = seq;
       await api.put(`/api/chapters/${encodeURIComponent(filename)}/output`, { content: text });
+      // Phản hồi của lượt lưu cũ về sau lượt mới → không phát bản cũ sang màn đọc.
+      if (outSaveSeqRef.current[filename] === seq) {
+        setSavedOutput(prev => ({ filename, content: text, n: (prev?.n || 0) + 1 }));
+      }
       setToast({ msg: "Đã lưu bản dịch", type: "success" });
       return true;
     } catch (err) {
@@ -759,7 +877,7 @@ function App() {
         cover_glyph: n.cover_glyph || (n.zh_name || "?")[0],
       };
       setNovels(ns => [...ns, novel]);
-      setCurrentSlug(n.slug);
+      selectNovel(n.slug);
       setToast({ msg: `Đã tạo truyện "${n.vi_name}"`, type: "success" });
     } catch (err) {
       setToast({ msg: `Lỗi tạo truyện: ${err.message}`, type: "error" });
@@ -786,22 +904,44 @@ function App() {
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, []);
+  }, [tab]);
 
   // ── Handlers ─────────────────────────────────────────────────────────
   function selectNovel(slug) {
     setRailOpen(false);  // đóng drawer mobile khi chọn truyện
-    if (slug === currentSlugRef.current) return;
+    if (slug === currentSlugRef.current) return true;
     const dirty = novelMdMeta.current.dirty || window.__vpDirty;
-    if (dirty && !window.confirm("Đang sửa dở chưa lưu (novel.md hoặc chương). Bỏ thay đổi và chuyển truyện?")) return;
+    if (dirty && !window.confirm("Đang sửa dở chưa lưu (novel.md hoặc chương). Bỏ thay đổi và chuyển truyện?")) return false;
+    currentSlugRef.current = slug;
+    chapterRequestRef.current++;
+    chaptersRef.current = [];
     setCurrentSlug(slug);
+    setReaderChapter(null);
+    setChaptersStatus("loading");
     setChapters([]);
     setGlossary({ characters: [], places: [], realms: [], skills: [] });
+    glossarySlugRef.current = null;
+    setGlossaryStatus("loading");
     setWikiEntities([]);
+    setWikiStatus("loading");
     setChecked({});
     setStreamingTexts({});
     setOpenChapter(null);
     pendingChapterRef.current = null;
+    return true;
+  }
+
+  function setTab(nextTab) {
+    if (nextTab === tab) return;
+    setRouteTab(nextTab);
+    if (nextTab !== "output") setReaderChapter(null);
+    pendingChapterRef.current = null;
+  }
+
+  function reloadReaderChapters() {
+    if (!currentSlug) return;
+    setChaptersStatus("loading");
+    loadChapters(currentSlug);
   }
 
   const toggleCheck = (fn) => setChecked(c => ({ ...c, [fn]: !c[fn] }));
@@ -864,7 +1004,7 @@ function App() {
 
   return (
     <>
-      <div className="app" data-layout={tweaks.layout}>
+      <div className="app" data-layout={tweaks.layout} data-reading={tab === "output" ? "true" : undefined}>
         <LeftRail
           novels={novelsWithStats}
           currentSlug={currentSlug}
@@ -886,12 +1026,16 @@ function App() {
             onToggleActivity={() => setTweak("showActivity", !tweaks.showActivity)}
             isRunning={isRunning}
             tabCounts={tabCounts}
+            theme={theme}
+            onTheme={changeTheme}
             onOpenRail={() => setRailOpen(true)}
           />
 
           {tab === "chapters" && (
             <ChaptersScreen
               chapters={chapters}
+              chaptersStatus={chaptersStatus}
+              onReloadChapters={reloadReaderChapters}
               isRunning={isRunning}
               agents={agents}
               showActivity={tweaks.showActivity}
@@ -922,6 +1066,8 @@ function App() {
           {tab === "glossary" && (
             <GlossaryScreen
               glossary={glossary}
+              status={glossaryStatus}
+              onReload={() => { if (currentSlug) { setGlossaryStatus("loading"); loadGlossary(currentSlug); } }}
               onAdd={onAddGloss}
               onEdit={onEditGloss}
               onDelete={onDeleteGloss}
@@ -931,15 +1077,30 @@ function App() {
           )}
 
           {tab === "wiki" && (
-            <WikiScreen entities={wikiEntities} novelSlug={currentSlug} />
+            <WikiScreen
+              entities={wikiEntities}
+              novelSlug={currentSlug}
+              status={wikiStatus}
+              onReload={() => { if (currentSlug) { setWikiStatus("loading"); loadWiki(currentSlug); } }}
+            />
           )}
 
           {tab === "output" && (
             <OutputScreen
+              key={currentSlug}
               chapters={chapters}
+              chaptersStatus={chaptersStatus}
+              onReloadChapters={reloadReaderChapters}
               novel={currentNovel}
+              routeChapter={readerChapter}
+              savedOutput={savedOutput}
+              onReadChapter={num => setReaderChapter(String(num))}
               onOpen={setOpenChapter}
-              mode={tweaks.fontReading}
+              onGoChapters={() => setTab("chapters")}
+              onOpenRail={() => setRailOpen(true)}
+              suspendKeys={!!openChapter || cmdkOpen || railOpen || newOpen}
+              fontMode={tweaks.fontReading}
+              onFontMode={setFontReading}
             />
           )}
 
@@ -947,6 +1108,8 @@ function App() {
             <SettingsScreen
               novel={currentNovel}
               novelMd={novelMd}
+              mdStatus={novelMdStatus}
+              onReloadMd={() => { if (currentSlug) { setNovelMdStatus("loading"); loadNovelMd(currentSlug, { force: true }); } }}
               onChange={editNovelMd}
               onSave={saveNovelMd}
             />
@@ -1007,7 +1170,7 @@ function App() {
             label="Reading font"
             value={tweaks.fontReading}
             options={["serif", "sans"]}
-            onChange={v => setTweak("fontReading", v)}
+            onChange={setFontReading}
           />
         </TweakSection>
 
