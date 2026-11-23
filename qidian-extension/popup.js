@@ -236,27 +236,52 @@ async function getActiveTab() {
 // thật — xem qidian-extension/docs/native-screenshot-tool-plan.md). Host native
 // đọc thẳng pixel màn hình bằng mss, y hệt Windows Snipping Tool.
 function openNativeCapturePort() {
-  const port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+  // Port tự mở lại nếu host đã ngắt (crash, message quá lớn...) — trước đây sau
+  // một lần ngắt, mọi lần thử lại đều báo "đang bận" và che mất lỗi thật.
+  let port = null;
   let pending = null;
-  port.onMessage.addListener((msg) => {
-    if (pending) { const { resolve } = pending; pending = null; resolve(msg); }
-  });
-  port.onDisconnect.addListener(() => {
-    if (pending) {
-      const { reject } = pending;
-      pending = null;
-      reject(new Error(chrome.runtime.lastError?.message ||
+  let parts = [];   // host chia ảnh lớn thành nhiều message {part,total,chunk}
+
+  function settle(fn, value) {
+    if (!pending) return;
+    const p = pending; pending = null; parts = [];
+    p[fn](value);
+  }
+
+  function connect() {
+    const p = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+    p.onMessage.addListener((msg) => {
+      if (!pending) return;
+      if (msg && msg.ok && typeof msg.total === 'number') {
+        parts[msg.part] = msg.chunk;
+        if (parts.filter(x => x !== undefined).length < msg.total) return;  // chờ đủ phần
+        settle('resolve', { ok: true, dataUrl: parts.join('') });
+      } else {
+        settle('resolve', msg);   // ping / lỗi / định dạng cũ có dataUrl
+      }
+    });
+    p.onDisconnect.addListener(() => {
+      if (port === p) port = null;
+      settle('reject', new Error(chrome.runtime.lastError?.message ||
         'Native host đã ngắt kết nối — đã cài đặt qidian-extension/native-host/install.ps1 chưa?'));
-    }
-  });
+    });
+    return p;
+  }
+
   function send(msg) {
     return new Promise((resolve, reject) => {
       if (pending) { reject(new Error('native port đang bận (gọi chồng lệnh)')); return; }
       pending = { resolve, reject };
-      port.postMessage(msg);
+      try {
+        if (!port) port = connect();
+        port.postMessage(msg);
+      } catch (err) {
+        port = null;
+        settle('reject', err);
+      }
     });
   }
-  return { send, disconnect: () => port.disconnect() };
+  return { send, disconnect: () => { if (port) port.disconnect(); port = null; } };
 }
 
 async function captureViaNativeHost(nativePort, rect) {
@@ -290,6 +315,22 @@ function toPhysicalRect(scrollInfo, viewportRelX, viewportRelY, width, height) {
 
 async function captureChapter(tabId) {
   const shots = [];
+
+  // Toạ độ chụp quy đổi từ CSS px × devicePixelRatio. Khi zoom trang khác 100%,
+  // innerHeight (CSS px, có zoom) và outerHeight (không zoom) lệch nhau → vùng
+  // chụp lệch, mất dòng đầu/cuối mỗi đoạn. Bắt buộc zoom 100%.
+  const zoom = await chrome.tabs.getZoom(tabId);
+  if (Math.abs(zoom - 1) > 0.01) {
+    throw new Error(`Trang đang zoom ${Math.round(zoom * 100)}% — đặt về 100% (Ctrl+0) rồi chụp lại.`);
+  }
+  const tab = await chrome.tabs.get(tabId);
+  const win = await chrome.windows.get(tab.windowId);
+  if (win.state !== 'maximized' && win.state !== 'fullscreen') {
+    // Cửa sổ thường có viền resize vô hình ~7px làm lệch toạ độ dọc; overlap giữa
+    // các đoạn thường bù được, nhưng phóng to cửa sổ là chắc ăn nhất.
+    setStatus('Lưu ý: nên phóng to (maximize) cửa sổ Chrome để vùng chụp chính xác.');
+  }
+
   const nativePort = openNativeCapturePort();
 
   try {

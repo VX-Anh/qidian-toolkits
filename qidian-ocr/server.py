@@ -109,7 +109,8 @@ def _run_dir(img_dir: Path, scale: float) -> list[str]:
         for idx, p in enumerate(images, 1):
             print(f"[ocr] [{idx}/{total}] {p.name}", flush=True)
             tmp = preprocess(p, scale=scale)
-            tmps.append(tmp)
+            if tmp != str(p):          # scale=1 trả về ảnh gốc — không được xoá
+                tmps.append(tmp)
             img_lines: list[str] = []
             for res in _ocr.predict(tmp):
                 img_lines.extend(extract_lines(res))

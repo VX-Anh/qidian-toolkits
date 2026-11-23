@@ -10,7 +10,6 @@ chỉ "đọc lại" phần đã hiển thị. Như vậy chỉ lấy được �
 Cài đặt (Windows PowerShell):
     pip install playwright
     playwright install chromium
-    # (tuỳ chọn, cho OCR fallback):  pip install ddddocr pillow
 
 Cách dùng:
     1. Sửa BOOK_ID bên dưới (lấy từ URL: book.qidian.com/info/<BOOK_ID>).
@@ -33,7 +32,6 @@ USER_DATA_DIR = "./qd_profile"  # thư mục lưu session đăng nhập (giữ n
 OUT_ROOT = pathlib.Path("./output") / BOOK_ID
 HEADLESS = False                # để False để đăng nhập tay; sau đó có thể đổi True
 MIN_DELAY, MAX_DELAY = 3.0, 7.0 # nghỉ ngẫu nhiên giữa các chương (giây) -> lịch sự, tránh bị chặn
-USE_OCR_FALLBACK = True         # bật OCR nếu text lấy ra có vẻ bị rối font
 # --------------------------------------------------------------------
 
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -47,11 +45,30 @@ def looks_garbled(text: str) -> bool:
     return weird / len(text) > 0.05
 
 
+class EncryptedFont(Exception):
+    """Chương dùng font mã hoá theo chương: text trong DOM là chữ Hán THẬT nhưng
+    SAI chữ (glyph được vẽ lại bằng font riêng) → không phát hiện được bằng PUA."""
+
+
+def has_encrypted_font(page) -> bool:
+    # Cùng dấu hiệu extension dùng (popup.js): class r-font-encrypt trên khối nội dung.
+    try:
+        return bool(page.evaluate(
+            "() => !!document.querySelector(\"[class*='r-font-encrypt']\")"))
+    except Exception:
+        return False
+
+
 def extract_chapter_text(page) -> str:
-    """3 lớp lấy text, ưu tiên sạch nhất."""
-    # Lớp 1: đọc biến JS đã giải mã (tên biến có thể đổi theo thời gian -> thử vài cái)
+    """2 lớp lấy text, ưu tiên sạch nhất. Raise EncryptedFont nếu chương dùng font
+    mã hoá — text lấy ra sẽ sai chữ dù trông như tiếng Trung bình thường."""
+    if has_encrypted_font(page):
+        raise EncryptedFont()
+
+    # Lớp 1: đọc biến JS đã giải mã (tên biến có thể đổi theo thời gian -> thử vài cái).
+    # KHÔNG dùng JSON.stringify(window.__NUXT__): cả khối state JSON dài, không có PUA
+    # nên lọt heuristic và bị lưu làm nội dung chương.
     for js in ("() => window.content",
-               "() => window.__NUXT__ && JSON.stringify(window.__NUXT__)",
                "() => document.querySelector('.read-content') && document.querySelector('.read-content').innerText"):
         try:
             val = page.evaluate(js)
@@ -71,18 +88,9 @@ def extract_chapter_text(page) -> str:
         except Exception:
             pass
 
-    # Lớp 3: OCR fallback (chụp khối nội dung rồi nhận dạng)
-    if USE_OCR_FALLBACK:
-        try:
-            import ddddocr  # noqa
-            ocr = ddddocr.DdddOcr(show_ad=False)
-            el = page.query_selector(".read-content") or page.query_selector("main")
-            if el:
-                png = el.screenshot()
-                return ocr.classification(png).strip()
-        except Exception as e:
-            print("    [OCR fallback lỗi]", e)
-
+    # Không còn "lớp OCR" bằng ddddocr: đó là OCR captcha cho chuỗi ngắn, đưa ảnh cả
+    # chương vào chỉ ra vài ký tự rác nhưng vẫn bị ghi thành file chương.
+    # Chương cần OCR → dùng extension (chụp màn hình thật) + qidian-ocr.
     return ""  # thất bại
 
 
@@ -134,6 +142,7 @@ def main():
             print("Không lấy được mục lục — kiểm tra lại BOOK_ID hoặc đã đăng nhập chưa.")
             ctx.close(); return
 
+        need_capture: list[str] = []
         for i, (title, url) in enumerate(chapters, 1):
             out = OUT_ROOT / safe_name(title, i)
             if out.exists():
@@ -149,8 +158,15 @@ def main():
                     pass
                 time.sleep(random.uniform(1.5, 3.0))
 
-                text = extract_chapter_text(page)
-                if text:
+                try:
+                    text = extract_chapter_text(page)
+                except EncryptedFont:
+                    need_capture.append(f"{i}\t{title}\t{url}")
+                    print(f"[{i}/{len(chapters)}] FONT MÃ HOÁ — bỏ qua, cần chụp bằng extension: {title}")
+                    text = None
+                if text is None:
+                    pass
+                elif text:
                     out.write_text(f"{title}\n\n{text}\n", encoding="utf-8")
                     print(f"[{i}/{len(chapters)}] OK  -> {out.name}  ({len(text)} ký tự)")
                 else:
@@ -161,6 +177,10 @@ def main():
             time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))  # nghỉ giữa các chương
 
         ctx.close()
+        if need_capture:
+            lst = OUT_ROOT / "can_chup_bang_extension.txt"
+            lst.write_text("\n".join(need_capture) + "\n", encoding="utf-8")
+            print(f"{len(need_capture)} chương dùng font mã hoá — danh sách: {lst.resolve()}")
         print("Xong. File nằm trong:", OUT_ROOT.resolve())
 
 

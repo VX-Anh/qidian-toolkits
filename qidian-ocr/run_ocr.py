@@ -32,22 +32,57 @@ def model_names(server: bool) -> tuple[str, str]:
     return f"PP-OCRv6_{tier}_det", f"PP-OCRv6_{tier}_rec"
 
 
+# Khối overlap phải đủ dài mới được coi là trùng: hai câu thoại ngắn khác nhau
+# (vd "“是。”\n“好。”" vs "“嗯。”\n“好。”") vẫn có ratio ~0.89 → trước đây bị xoá nhầm.
+MIN_OVERLAP_CHARS = 12
+# Overlap chỉ 1 dòng: yêu cầu dòng đủ dài + gần như trùng khít.
+MIN_SINGLE_LINE_CHARS = 8
+SINGLE_LINE_THRESHOLD = 0.92
+
+
+def _ratio(a: str, b: str) -> float:
+    # autojunk=False: với chuỗi > 200 ký tự, heuristic "junk" mặc định coi các ký tự
+    # hay gặp (dấu câu CJK) là rác và làm ratio sai lệch.
+    return SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def _is_truncated_fragment(line: str, tail: list[str]) -> bool:
+    """Dòng đầu ảnh bị cắt ngang (chỉ còn nửa trên/dưới glyph) thường là rác rất
+    ngắn hoặc giống một phần dòng nào đó ở đuôi ảnh trước. Dòng thật thì không."""
+    s = line.strip()
+    if len(s) <= 3:
+        return True
+    return any(_ratio(s, t) >= 0.5 or s in t for t in tail)
+
+
 def find_head_overlap(prev_lines: list[str], curr_lines: list[str],
                       max_window: int = 15, threshold: float = 0.85,
                       max_skip: int = 3) -> int:
     """
     Trả về số dòng đầu curr_lines cần bỏ (overlap + partial truncated lines).
-    max_skip: cho phép bỏ qua tối đa N dòng đầu bị truncated trước khi so sánh.
+    max_skip: cho phép bỏ qua tối đa N dòng đầu bị truncated trước khi so sánh —
+    nhưng chỉ khi các dòng đó trông như mảnh bị cắt (xem _is_truncated_fragment),
+    để không xoá dòng thật đứng trước khối overlap.
     """
     max_check = min(len(prev_lines), len(curr_lines), max_window)
+    tail_window = prev_lines[-max_window:]
     for skip in range(max_skip + 1):
-        for size in range(max_check - skip, 1, -1):
+        if skip and not all(_is_truncated_fragment(l, tail_window) for l in curr_lines[:skip]):
+            break
+        for size in range(max_check - skip, 0, -1):
             tail = prev_lines[-size:]
             head = curr_lines[skip:skip + size]
             if len(head) < size:
                 continue
-            ratio = SequenceMatcher(None, "\n".join(tail), "\n".join(head)).ratio()
-            if ratio >= threshold:
+            a, b = "\n".join(tail), "\n".join(head)
+            if size == 1:
+                if (min(len(a), len(b)) >= MIN_SINGLE_LINE_CHARS
+                        and _ratio(a, b) >= SINGLE_LINE_THRESHOLD):
+                    return skip + 1
+                continue
+            if min(len(a), len(b)) < MIN_OVERLAP_CHARS:
+                continue
+            if _ratio(a, b) >= threshold:
                 return skip + size
     return 0
 
@@ -56,6 +91,8 @@ def preprocess(img_path: Path, scale: float = 2.0) -> str:
     """Upscale + sharpen image, save to temp file, return temp path."""
     import tempfile
     from PIL import Image, ImageFilter
+    if not scale or scale == 1.0:
+        return str(img_path)   # không cần xử lý → khỏi ghi PNG tạm cho mỗi ảnh
     img = Image.open(img_path).convert("RGB")
     w, h = img.size
     if scale and scale != 1.0:
@@ -131,7 +168,8 @@ def main():
         # Dòng "OCR: " được backend (run_paddle_ocr) đếm để hiện tiến trình → giữ prefix.
         print(f"OCR: [{idx}/{total}] {img_path.name}")
         tmp = preprocess(img_path, scale=args.scale)
-        tmp_files.append(tmp)
+        if tmp != str(img_path):   # scale=1 trả về ảnh gốc — không được xoá
+            tmp_files.append(tmp)
         if args.scale and args.scale != 1.0:
             print(f"  -> tiền xử lý: upscale x{args.scale} + sharpen")
 

@@ -116,6 +116,10 @@ async def _finalize_ocr(
     return True
 
 
+_sidecar_lock = asyncio.Lock()
+_sidecar_waiting = 0
+
+
 async def _run_paddle_ocr_http(
     job_id, novel_slug, chapter_title_hint, image_paths, state, event_queue, settings, out_filename
 ):
@@ -131,11 +135,30 @@ async def _run_paddle_ocr_http(
 
     url = settings.ocr_service_url.rstrip("/") + "/ocr"
     payload = {"img_dir": str(img_dir), "output_path": str(output_path)}
-    # Chương chỉ vài ảnh nhưng lần đầu service tải model có thể lâu → timeout rộng.
-    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
-        resp = await client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    # Sidecar xử lý từng chương một (lock). Trước đây gửi 5 chương liền thì các
+    # chương sau timeout vì 600s tính cả thời gian xếp hàng, trong khi sidecar vẫn
+    # OCR tiếp. Giờ backend tự xếp hàng; timeout chỉ tính lúc thực sự OCR và theo
+    # số ảnh (lần đầu sidecar tải model có thể lâu → sàn 600s).
+    global _sidecar_waiting
+    if _sidecar_lock.locked():
+        await event_queue.put({
+            "type": "ocr_progress", "step": "paddle", "page": 0, "total": total,
+            "msg": f"Đang chờ lượt OCR ({_sidecar_waiting + 1} chương phía trước)…",
+        })
+    _sidecar_waiting += 1
+    acquired = False
+    try:
+        async with _sidecar_lock:
+            _sidecar_waiting -= 1
+            acquired = True
+            timeout = max(600.0, 90.0 * total)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+                resp = await client.post(url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+    finally:
+        if not acquired:          # bị huỷ khi đang xếp hàng
+            _sidecar_waiting -= 1
 
     full_text = (data.get("text") or "").strip()
     # Phòng khi response không kèm text (vd service bản cũ) → đọc lại file trên volume.

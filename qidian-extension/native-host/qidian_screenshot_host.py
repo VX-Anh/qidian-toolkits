@@ -8,8 +8,13 @@ stdin/stdout theo giao thức Native Messaging: mỗi message có 4 byte độ d
 Actions hỗ trợ:
   {"action": "ping"} -> {"ok": true, "pong": true}
   {"action": "capture", "x": int, "y": int, "width": int, "height": int}
-    -> {"ok": true, "dataUrl": "data:image/jpeg;base64,..."}
+    -> một hoặc nhiều message {"ok": true, "part": i, "total": n, "chunk": "..."}
+       ghép các chunk theo thứ tự = "data:image/jpeg;base64,..."
     (x/y/width/height là tọa độ VẬT LÝ màn hình, đã nhân devicePixelRatio)
+
+Chrome giới hạn message host → extension tối đa 1 MB (vượt là ngắt port). Ảnh
+JPEG chất lượng cao của một chunk trang trên màn DPR 2 / 4K có thể vượt mức đó
+sau khi base64, nên dataUrl được chia thành nhiều message nhỏ.
 
 Chạy chụp bằng mss (đọc thẳng compositor màn hình, không đi qua bất kỳ
 đường render nội bộ nào của Chrome) để né lỗi glyph sai khi Chromium chụp
@@ -26,6 +31,8 @@ import mss
 from PIL import Image
 
 JPEG_QUALITY = 95
+# Giữ mỗi message dưới giới hạn 1 MB của Chrome (chừa chỗ cho JSON bao ngoài).
+MAX_CHUNK_CHARS = 700_000
 
 
 def read_message():
@@ -62,8 +69,9 @@ def handle_capture(msg, sct):
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=JPEG_QUALITY)
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    return {"ok": True, "dataUrl": f"data:image/jpeg;base64,{b64}"}
+    data_url = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    chunks = [data_url[i:i + MAX_CHUNK_CHARS] for i in range(0, len(data_url), MAX_CHUNK_CHARS)]
+    return [{"ok": True, "part": i, "total": len(chunks), "chunk": c} for i, c in enumerate(chunks)]
 
 
 def main():
@@ -81,7 +89,8 @@ def main():
                 if action == "ping":
                     send_message({"ok": True, "pong": True})
                 elif action == "capture":
-                    send_message(handle_capture(msg, sct))
+                    for part in handle_capture(msg, sct):
+                        send_message(part)
                 else:
                     send_message({"ok": False, "error": f"action không rõ: {action!r}"})
             except Exception as exc:  # báo lỗi về extension thay vì crash im lặng
