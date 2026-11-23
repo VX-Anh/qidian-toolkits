@@ -42,7 +42,10 @@ services:
       - ./secrets/gcp-sa.json:/secrets/gcp-sa.json:ro
 
     depends_on:
-      - ocr
+      # Chờ sidecar nạp xong model (HEALTHCHECK trong qidian-ocr/Dockerfile) — tránh
+      # request OCR đầu tiên sau deploy bị connection refused.
+      ocr:
+        condition: service_healthy
 
   # ── Sidecar OCR: PaddleOCR PP-OCRv6 trên GPU ────────────────────────────────
   # Build context là sibling ../qidian-ocr (compose file nằm trong qidian-vietphase/).

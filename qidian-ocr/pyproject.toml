@@ -12,5 +12,3 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "anyio>=4.0",
 ]
-
-[tool.uv.sources]

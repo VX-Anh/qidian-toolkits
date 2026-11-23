@@ -16,9 +16,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PADDLE_DEVICE=gpu \
     HOME=/root
 
-# python + system libs cho paddle/opencv (libgl1, libgomp1… là các lib wheel link động).
+# python3 của Ubuntu 22.04 là 3.10 (python3-pip đi kèm bản này) — trước đây cài
+# thêm python3.11 nhưng không dùng tới. curl cho HEALTHCHECK.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.11 python3-pip \
+        python3 python3-pip curl \
         libgomp1 libglib2.0-0 libgl1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -31,7 +32,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
  && python3 -m pip install --no-cache-dir \
         paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ \
  && python3 -m pip install --no-cache-dir \
-        "paddleocr>=3.7.0" "fastapi>=0.115" "uvicorn[standard]>=0.32" anyio
+        "paddleocr==3.7.0" "fastapi==0.136.1" "uvicorn[standard]==0.47.0" "anyio==4.13.0"
 
 # Chỉ cần 2 file mã nguồn; run_ocr.py cung cấp các hàm thuần cho server.py import.
 COPY run_ocr.py server.py ./
@@ -40,4 +41,7 @@ COPY run_ocr.py server.py ./
 VOLUME ["/root/.paddlex"]
 
 EXPOSE 8000
+# Sẵn sàng = model đã nạp xong (lần đầu tải PP-OCRv6 có thể mất vài phút).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+    CMD curl -fs http://localhost:8000/health | grep -q '"ready":true' || exit 1
 CMD ["python3", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

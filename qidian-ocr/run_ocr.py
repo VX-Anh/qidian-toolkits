@@ -120,6 +120,52 @@ def extract_lines(res) -> list[str]:
     return [t.strip() for t in texts if t and t.strip()]
 
 
+def build_ocr(server: bool, device: str = "cpu"):
+    """Dựng PaddleOCR 3.x (PP-OCRv6) với cấu hình dùng chung cho CLI và visualize.py.
+
+    Văn bản tiểu thuyết là chữ ngang một cột → tắt các module phụ (orientation /
+    unwarping / textline orientation) cho nhanh và tránh xoay nhầm.
+    enable_mkldnn=False: paddlepaddle 3.3 CPU với oneDNN dính bug PIR executor
+    (ConvertPirAttribute2RuntimeAttribute not support ...ArrayAttribute<DoubleAttribute>)
+    trên model PP-OCRv6 → tắt MKLDNN để chạy nhánh CPU thường.
+    """
+    from paddleocr import PaddleOCR
+
+    det_name, rec_name = model_names(server)
+    print(f"[PP-OCRv6] det={det_name} rec={rec_name} (lần đầu sẽ tự tải model)")
+    return PaddleOCR(
+        text_detection_model_name=det_name,
+        text_recognition_model_name=rec_name,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        device=device,
+        enable_mkldnn=False,
+    )
+
+
+def extract_details(res) -> list[dict]:
+    """Như extract_lines nhưng kèm độ tin cậy + polygon (cho visualize.py):
+    [{text, confidence, bbox: [[x,y]×4]}]."""
+    def get(key):
+        try:
+            return res[key]
+        except Exception:
+            j = getattr(res, "json", None)
+            return (j.get("res") or j).get(key) if isinstance(j, dict) else None
+
+    texts = get("rec_texts") or []
+    scores = get("rec_scores") or [1.0] * len(texts)
+    polys = get("rec_polys") or get("dt_polys") or [None] * len(texts)
+    out = []
+    for t, s, p in zip(texts, scores, polys):
+        if not t or not t.strip():
+            continue
+        bbox = [[float(x), float(y)] for x, y in p] if p is not None else []
+        out.append({"text": t.strip(), "confidence": round(float(s), 4), "bbox": bbox})
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("folder", help="Thư mục chứa ảnh chapter")
@@ -141,25 +187,7 @@ def main():
 
     output_path = Path(args.output) if args.output else folder / "output.txt"
 
-    from paddleocr import PaddleOCR
-
-    det_name, rec_name = model_names(args.server)
-    print(f"[PP-OCRv6] det={det_name} rec={rec_name} (lần đầu sẽ tự tải model)")
-
-    # Văn bản tiểu thuyết là chữ ngang một cột → tắt các module phụ (orientation /
-    # unwarping / textline orientation) cho nhanh và tránh xoay nhầm.
-    # enable_mkldnn=False: paddlepaddle 3.3 CPU với oneDNN dính bug PIR executor
-    # (ConvertPirAttribute2RuntimeAttribute not support ...ArrayAttribute<DoubleAttribute>)
-    # trên model PP-OCRv6 → tắt MKLDNN để chạy nhánh CPU thường.
-    ocr = PaddleOCR(
-        text_detection_model_name=det_name,
-        text_recognition_model_name=rec_name,
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=False,
-        device="cpu",
-        enable_mkldnn=False,
-    )
+    ocr = build_ocr(args.server, device="cpu")
 
     all_lines: list[str] = []
     tmp_files = []

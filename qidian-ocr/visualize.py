@@ -102,12 +102,30 @@ def visualize_clean(image_path: str, details: list[dict], output_path: str | Non
     return img
 
 
+def stitch_images(image_paths: list[str], gap: int = 0, bg_color: tuple = (255, 255, 255)) -> Image.Image:
+    """Ghép dọc nhiều ảnh thành một ảnh dài, scale về cùng chiều rộng (ảnh rộng nhất)."""
+    imgs = [Image.open(p).convert("RGB") for p in image_paths]
+    target_w = max(img.width for img in imgs)
+    resized = []
+    for img in imgs:
+        if img.width != target_w:
+            img = img.resize((target_w, int(img.height * target_w / img.width)), Image.LANCZOS)
+        resized.append(img)
+    total_h = sum(img.height for img in resized) + gap * (len(resized) - 1)
+    canvas = Image.new("RGB", (target_w, total_h), bg_color)
+    y = 0
+    for img in resized:
+        canvas.paste(img, (0, y))
+        y += img.height + gap
+    return canvas
+
+
 def run_pipeline(image_paths: list[str], output_stem: str | None = None, stitch_gap: int = 10) -> None:
     """
     Full pipeline: stitch (if multiple images) → OCR → visualize.
     output_stem: base path for output files (without extension).
     """
-    from ocr import ocr_image_with_details, stitch_images
+    from run_ocr import build_ocr, extract_details
     import tempfile
 
     if len(image_paths) == 1:
@@ -135,7 +153,8 @@ def run_pipeline(image_paths: list[str], output_stem: str | None = None, stitch_
         print(f"Saved stitched source: {out_stitched}")
 
     print(f"Running OCR...")
-    details = ocr_image_with_details(ocr_source)
+    ocr = build_ocr(server=True)
+    details = [d for res in ocr.predict(ocr_source) for d in extract_details(res)]
     print(f"Detected {len(details)} text regions")
 
     visualize_ocr(ocr_source, details, out_labeled)

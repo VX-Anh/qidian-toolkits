@@ -11,8 +11,6 @@ dataset/
 # Tài liệu
 *.md
 
-# requirements.txt là bản v4 CŨ đã stale (paddlepaddle 2.6.2) — loại để khỏi nhầm
-requirements.txt
 
 # Git
 .git/
