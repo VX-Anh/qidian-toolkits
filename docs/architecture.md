@@ -1,6 +1,7 @@
 # Kiến trúc
 
-Sơ đồ các phần chính của VietPhase (cập nhật theo T-950d2566).
+Bản đồ do Tech Lead cập nhật (lần gần nhất: T-950d2566). Agent đọc file này
+trước khi làm để biết các phần đã có; sửa kiến trúc thì cập nhật sơ đồ.
 
 ```mermaid
 flowchart TB
