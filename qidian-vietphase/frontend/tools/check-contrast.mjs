@@ -79,3 +79,46 @@ for (const theme of ["light", "sepia", "dark"]) {
   const pairs = ["fg", "muted", "accent"].map(role => [`${prefix}-${role}`, `${prefix}-bg`]);
   check(`Nền đọc ${theme}`, block(":root"), pairs);
 }
+
+// ── Cặp màu thực tế trong vùng đọc ───────────────────────────────────────────
+// Nền đọc độc lập với theme app, nên chữ của phần tử nền trong suốt (StatusBlock, nút
+// ghost/secondary) phải lấy màu nền đọc. Đọc màu chữ khai báo trong reader.css rồi kiểm
+// mọi tổ hợp theme app × nền đọc: --rd-* → bảng màu nền đọc, --fg-* … → token của theme app.
+const readerCss = readFileSync(new URL("../src/reader.css", import.meta.url), "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "");
+const READER_TEXT = [
+  ["StatusBlock tiêu đề", ".rd-scroll .status-block-title"],
+  ["StatusBlock mô tả", ".rd-scroll .status-block-message"],
+  ["Nút ghost", ".rd-scroll .btn.ghost"],
+  ["Nút ghost (hover)", ".rd-scroll .btn.ghost:hover:not(:disabled)"],
+  ["Nút secondary", ".rd-scroll .btn.secondary"],
+  ["Nút secondary (hover)", ".rd-scroll .btn.secondary:hover:not(:disabled)"],
+  ["Ghi chú chương", ".rd-note"],
+  ["Hết chương", ".rd-end-none"],
+];
+function readerColor(selector) {
+  const esc = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = readerCss.match(new RegExp(`(?:^|\\})\\s*${esc}\\s*\\{([^{}]*)\\}`, "m"));
+  if (!m) throw new Error(`reader.css thiếu rule ${selector}`);
+  const color = m[1].match(/(?:^|;)\s*color:\s*var\(--([\w-]+)\)/);
+  if (!color) throw new Error(`reader.css: ${selector} cần color: var(--token)`);
+  const bg = m[1].match(/(?:^|;)\s*background:\s*([^;]+)/);
+  if (bg && bg[1].trim() !== "transparent") {
+    throw new Error(`reader.css: ${selector} cần nền trong suốt (đang ${bg[1].trim()})`);
+  }
+  return color[1];
+}
+for (const theme of ["dark", "light"]) {
+  const appTokens = { ...block(":root"), ...block(`:root[data-theme="${theme}"]`) };
+  for (const bg of ["light", "sepia", "dark"]) {
+    const tokens = { ...appTokens };
+    const pairs = READER_TEXT.map(([label, selector]) => {
+      const fg = readerColor(selector);
+      const rd = fg.match(/^rd-(fg|muted|accent)$/);
+      const name = rd ? `reader-${bg}-${rd[1]}` : fg;
+      tokens[`__${label}`] = `var(--${name})`;
+      return [`__${label}`, `reader-${bg}-bg`];
+    });
+    check(`App ${theme} × nền đọc ${bg}`, tokens, pairs);
+  }
+}

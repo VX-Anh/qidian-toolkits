@@ -78,7 +78,8 @@ function rdRestoreTop({ paraTop, paraHeight, pin, frac, max, offset }) {
   return Math.round(Math.min(Math.max(0, max), Math.max(0, top)));
 }
 
-// Nội dung, lỗi và quyền xuất gắn với đúng một lần tải (chương + lần thử lại).
+// Nội dung, lỗi và quyền xuất gắn với đúng một lượt tải: mỗi lần chọn chương (kể cả quay
+// lại đúng file cũ: A → B → A) hay bấm thử lại đều tăng nonce, nên kết quả cũ không khớp.
 function rdLoadKey(filename, nonce) {
   return filename ? `${filename}\n${nonce}` : null;
 }
@@ -169,7 +170,7 @@ function OutputScreen({
   const [cur, setCur] = useStateO(null);
   const [missing, setMissing] = useStateO(null);   // { num } khi routeChapter không đọc được
   const [loadRes, setLoadRes] = useStateO(null);   // { key, content, error: { msg, offline } | null }
-  const [retryNonce, setRetryNonce] = useStateO(0);
+  const [loadSeq, setLoadSeq] = useStateO(0);      // tăng mỗi lượt chọn chương / thử lại
   const [copied, setCopied] = useStateO("");
 
   const [prefs, setPrefs] = useStateO(() => rdSanitizePrefs(rdLoad(RD_PREFS_KEY)));
@@ -192,7 +193,7 @@ function OutputScreen({
   const tocListRef = useRefO(null);
 
   const filename = cur?.filename || null;
-  const loadKey = rdLoadKey(filename, retryNonce);
+  const loadKey = rdLoadKey(filename, loadSeq);
   // Suy ra ngay trong render: đổi chương / thử lại thì lần render đầu đã là "loading",
   // không ghép tiêu đề chương mới với nội dung hay lỗi của lần tải trước.
   const view = rdViewState(filename, loadKey, loadRes);
@@ -218,6 +219,7 @@ function OutputScreen({
     restoreRef.current = restore ? { filename: ch.filename, ...restore } : null;
     setMissing(null);
     setCur(ch);
+    setLoadSeq(n => n + 1);   // lượt tải mới: kết quả/lỗi của lượt trước (kể cả cùng file) bị bỏ
     setBarsHidden(false);
     lastTopRef.current = 0;
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
@@ -248,23 +250,35 @@ function OutputScreen({
     go(done[0]);
   }, [done, slug, go]);
 
+  // Route đã xử lý gần nhất. Route đổi lúc danh sách đang tải/lỗi thì giữ lại, xử lý khi "ready".
+  const handledRouteRef = useRefO(undefined);
+
   // Lần đầu danh sách chương sẵn sàng.
   useEffectO(() => {
     if (initRef.current || chaptersStatus !== "ready") return;
     if (!done.length && !routeChapter) return;   // empty state; chờ có chương
     initRef.current = true;
+    handledRouteRef.current = routeChapter;
     resolve(routeChapter);
   }, [chaptersStatus, done, routeChapter, resolve]);
 
-  // URL đổi từ bên ngoài (gõ hash, Back) → theo URL.
+  // URL đổi từ bên ngoài (gõ hash, Back) → theo URL, khi danh sách chương sẵn sàng.
   useEffectO(() => {
     if (!initRef.current || chaptersStatus !== "ready") return;
-    if (routeChapter == null || routeChapter === "") return;
-    if (cur && String(cur.chapter_num) === String(routeChapter)) return;
+    if (handledRouteRef.current === routeChapter) return;
+    handledRouteRef.current = routeChapter;
+    if (routeChapter == null || routeChapter === "") {
+      // Bỏ số chương khỏi URL: đang hiện chương thì giữ; đang báo "chưa có bản dịch" → tiến độ.
+      if (!missing) return;
+      setMissing(null);
+      resolve(null);
+      return;
+    }
+    if (cur && !missing && String(cur.chapter_num) === String(routeChapter)) return;
     if (missing && String(missing.num) === String(routeChapter)) return;
     resolve(routeChapter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeChapter]);
+  }, [routeChapter, chaptersStatus]);
 
   // Đang ở StatusBlock "chưa có bản dịch" mà chương đó vừa dịch xong → mở luôn.
   useEffectO(() => {
@@ -309,12 +323,12 @@ function OutputScreen({
       });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filename, retryNonce]);
+  }, [filename, loadSeq]);
 
   // Có mạng lại → tự thử lại.
   useEffectO(() => {
     if (!error) return;
-    const h = () => setRetryNonce(n => n + 1);
+    const h = () => setLoadSeq(n => n + 1);
     window.addEventListener("online", h);
     return () => window.removeEventListener("online", h);
   }, [error]);
@@ -549,7 +563,7 @@ function OutputScreen({
       <RdStatus kind="empty" title={`Chương ${cur.chapter_num} chưa có nội dung`}
         desc="File bản dịch của chương này đang trống. Thử tải lại, hoặc mở đối chiếu để kiểm tra."
         actions={<>
-          {btn("Tải lại", () => setRetryNonce(n => n + 1), "secondary", "refresh")}
+          {btn("Tải lại", () => setLoadSeq(n => n + 1), "secondary", "refresh")}
           {nextCh && btn(`Đọc chương ${nextCh.chapter_num}`, () => go(nextCh), "primary", "next")}
         </>} />
     );
@@ -558,7 +572,7 @@ function OutputScreen({
       <RdStatus kind="error"
         title={error.offline ? "Mất kết nối mạng" : `Không tải được chương ${cur?.chapter_num ?? ""}`}
         desc={error.offline ? "Bản dịch sẽ tự tải lại khi có mạng." : error.msg}
-        actions={btn("Thử lại", () => setRetryNonce(n => n + 1), "primary", error.offline ? "wifiOff" : "refresh")} />
+        actions={btn("Thử lại", () => setLoadSeq(n => n + 1), "primary", error.offline ? "wifiOff" : "refresh")} />
     );
   } else {
     body = (

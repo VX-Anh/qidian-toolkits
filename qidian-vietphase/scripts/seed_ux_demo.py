@@ -165,6 +165,75 @@ def check_root(root: Path) -> str | None:
     return None
 
 
+# ── Chặn ghi ra ngoài root qua liên kết tượng trưng ──────────────────────────
+
+def ensure_inside(root: Path, target: Path) -> Path:
+    """Từ chối nếu target (đường dẫn dưới root, có thể chưa tồn tại) đi ra ngoài root.
+
+    root đã chuẩn hoá (realpath). Kiểm cả hai: realpath của target phải nằm trong root, và
+    không thành phần nào từ root xuống (thư mục trung gian hay chính file đích, kể cả liên
+    kết hỏng) là liên kết tượng trưng — liên kết trỏ vào trong root cũng bị từ chối để
+    không phụ thuộc thứ tự tạo/xoá giữa lúc kiểm và lúc ghi.
+    """
+    try:
+        rel = target.relative_to(root)
+    except ValueError:
+        raise SystemExit(f"Từ chối: {target} không nằm dưới {root}.")
+    cur = root
+    for part in rel.parts:
+        if part in ("", ".", ".."):
+            raise SystemExit(f"Từ chối: đường dẫn {target} có thành phần không hợp lệ.")
+        cur = cur / part
+        if cur.is_symlink():
+            raise SystemExit(f"Từ chối: {cur} là liên kết tượng trưng (có thể ghi ra ngoài {root}).")
+    real = _norm(target)
+    if not _is_within(real, root):
+        raise SystemExit(f"Từ chối: {target} trỏ ra ngoài {root} ({real}).")
+    return target
+
+
+def _mkdir(root: Path, d: Path) -> None:
+    ensure_inside(root, d)
+    d.mkdir(parents=True, exist_ok=True)
+    ensure_inside(root, d)
+
+
+def _write(root: Path, f: Path, data: bytes) -> None:
+    ensure_inside(root, f.parent)
+    ensure_inside(root, f)
+    f.write_bytes(data)
+
+
+def _db_files(paths: dict[str, Path]) -> list[Path]:
+    db = paths["DB_PATH"]
+    return [db.parent, db] + [db.with_name(db.name + suf) for suf in ("-wal", "-shm", "-journal")]
+
+
+def planned_targets(root: Path, novel_keys=None, nums=None) -> list[Path]:
+    """Mọi đường dẫn script sẽ ghi hoặc mở (để kiểm trước khi ghi bất cứ thứ gì)."""
+    paths = _paths(root)
+    out: list[Path] = [root / MARKER]
+    out += [p for k, p in paths.items() if k != "DB_PATH"]
+    out += _db_files(paths)
+    for key, novel in NOVELS.items():
+        if novel_keys is not None and key not in novel_keys:
+            continue
+        slug = novel["slug"]
+        out += [paths["RULES_DIR"] / slug, paths["RULES_DIR"] / slug / "novel.md",
+                paths["OUTPUT_DIR"] / slug]
+        for num, (zh_title, vi_title) in novel["chapters"].items():
+            if nums is not None and num not in nums:
+                continue
+            out.append(paths["INPUT_DIR"] / _zh_filename(num, zh_title))
+            out.append(_out_path(paths, slug, num, vi_title))
+    return out
+
+
+def preflight(root: Path, novel_keys=None, nums=None) -> None:
+    for t in planned_targets(root, novel_keys, nums):
+        ensure_inside(root, t)
+
+
 # ── Ghi dữ liệu ─────────────────────────────────────────────────────────────
 
 def _paths(root: Path) -> dict[str, Path]:
@@ -187,7 +256,9 @@ def _out_path(paths: dict[str, Path], slug: str, num: int, vi_title: str) -> Pat
     return paths["OUTPUT_DIR"] / slug / f"Chuong_{num:04d}_{vi_title}.txt"
 
 
-def _open_state(paths: dict[str, Path]):
+def _open_state(root: Path, paths: dict[str, Path]):
+    for f in _db_files(paths):          # DB và file phụ của SQLite không được là liên kết
+        ensure_inside(root, f)
     # Đặt env trước khi import backend để mọi cấu hình đọc sau này trỏ vào root tạm.
     for k, v in paths.items():
         os.environ[k] = str(v)
@@ -196,7 +267,7 @@ def _open_state(paths: dict[str, Path]):
     return SharedState(str(paths["DB_PATH"]))
 
 
-def _mark(state, paths, novel: dict, num: int, done: bool) -> None:
+def _mark(root: Path, state, paths, novel: dict, num: int, done: bool) -> None:
     from backend.agent.state import ChapterStatus  # noqa: E402
     if num not in novel["chapters"]:
         raise SystemExit(f"Truyện {novel['slug']} không có chương {num}")
@@ -204,9 +275,10 @@ def _mark(state, paths, novel: dict, num: int, done: bool) -> None:
     filename = _zh_filename(num, zh_title)
     out = _out_path(paths, novel["slug"], num, vi_title)
     if done:
-        out.parent.mkdir(parents=True, exist_ok=True)
+        _mkdir(root, out.parent)
+        ensure_inside(root, out)
         if not out.is_file():
-            out.write_bytes(f"# {vi_title}\n\n{_vi_content(num, vi_title)}\n".encode("utf-8"))
+            _write(root, out, f"# {vi_title}\n\n{_vi_content(num, vi_title)}\n".encode("utf-8"))
         asyncio.run(state.set_status(
             filename, ChapterStatus.DONE, vi_title=vi_title, translated_path=str(out.resolve()),
         ))
@@ -218,28 +290,27 @@ def _mark(state, paths, novel: dict, num: int, done: bool) -> None:
 
 def seed(root: Path) -> None:
     paths = _paths(root)
+    preflight(root)                     # kiểm hết trước khi ghi bất cứ thứ gì
     for key, p in paths.items():
-        (p.parent if key == "DB_PATH" else p).mkdir(parents=True, exist_ok=True)
-    (root / MARKER).write_text("Dữ liệu mẫu do scripts/seed_ux_demo.py tạo. Xoá thoải mái.\n",
-                               encoding="utf-8")
+        _mkdir(root, p.parent if key == "DB_PATH" else p)
+    _write(root, root / MARKER,
+           "Dữ liệu mẫu do scripts/seed_ux_demo.py tạo. Xoá thoải mái.\n".encode("utf-8"))
 
     sys.path.insert(0, str(APP_DIR))
     from backend.agent.novel_loader import render_novel_template  # noqa: E402
 
-    state = _open_state(paths)
+    state = _open_state(root, paths)
     for novel in NOVELS.values():
         slug = novel["slug"]
         rules = paths["RULES_DIR"] / slug
-        rules.mkdir(parents=True, exist_ok=True)
-        (rules / "novel.md").write_text(
-            render_novel_template(APP_DIR / "rules", novel["zh_name"], novel["vi_name"]),
-            encoding="utf-8",
-        )
+        _mkdir(root, rules)
+        _write(root, rules / "novel.md",
+               render_novel_template(APP_DIR / "rules", novel["zh_name"], novel["vi_name"]).encode("utf-8"))
         for num, (zh_title, _vi) in novel["chapters"].items():
             filename = _zh_filename(num, zh_title)
-            (paths["INPUT_DIR"] / filename).write_bytes(_zh_content(num, zh_title).encode("utf-8"))
+            _write(root, paths["INPUT_DIR"] / filename, _zh_content(num, zh_title).encode("utf-8"))
             asyncio.run(state.upsert_chapter(filename, slug, num, zh_title))
-            _mark(state, paths, novel, num, num in novel["done"])
+            _mark(root, state, paths, novel, num, num in novel["done"])
         print(f"  {slug}: {len(novel['chapters'])} chương, done = {sorted(novel['done'])}")
 
 
@@ -276,12 +347,14 @@ def main() -> int:
             print(f"Không có truyện '{args.novel}' (dùng a, b hoặc slug).", file=sys.stderr)
             return 2
         paths = _paths(root)
-        state = _open_state(paths)
+        novel_key = next(k for k, n in NOVELS.items() if n is novel)
+        preflight(root, {novel_key}, set(args.mark_done) | set(args.unmark))
+        state = _open_state(root, paths)
         for n in args.mark_done:
-            _mark(state, paths, novel, n, True)
+            _mark(root, state, paths, novel, n, True)
             print(f"  {novel['slug']}: chương {n} → done")
         for n in args.unmark:
-            _mark(state, paths, novel, n, False)
+            _mark(root, state, paths, novel, n, False)
             print(f"  {novel['slug']}: chương {n} → pending")
     else:
         if root.exists() and not root.is_dir():

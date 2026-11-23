@@ -149,3 +149,37 @@ test('Tải xong có nội dung / lỗi đúng chương', () => {
   assert.equal(err.canExport, false);
   assert.equal(rdViewState(null, null, null).phase, 'idle');
 });
+
+// ── A → B → A: lượt chọn chương mới không được khớp kết quả cũ của cùng file ────
+// Mỗi lượt chọn chương tăng nonce (go() gọi setLoadSeq), nên khoá của lượt quay lại A
+// khác khoá của lần tải A trước — nội dung, lỗi và quyền Sao chép/.txt cũ đều bị bỏ.
+test('A → B → A (B chậm): không hiện nội dung cũ của A, chưa cho xuất', () => {
+  const { rdViewState, rdLoadKey } = createReader();
+  let seq = 0;
+  const pick = () => ++seq;   // mô phỏng go()
+  const a1 = pick();
+  const resA = { key: rdLoadKey('A.txt', a1), content: 'nội dung A cũ', error: null };
+  assert.equal(rdViewState('A.txt', rdLoadKey('A.txt', a1), resA).phase, 'ready');
+  pick();                     // sang B, B chưa trả về
+  const a2 = pick();          // quay lại A
+  const v = rdViewState('A.txt', rdLoadKey('A.txt', a2), resA);
+  assert.equal(v.phase, 'loading');
+  assert.equal(v.content, '');
+  assert.equal(v.canExport, false);
+});
+
+test('A → B → A: lỗi cũ của A không hiện lại trong lúc tải lượt mới', () => {
+  const { rdViewState, rdLoadKey } = createReader();
+  const errA = { key: rdLoadKey('A.txt', 1), content: '', error: { msg: 'mất mạng', offline: true } };
+  const v = rdViewState('A.txt', rdLoadKey('A.txt', 3), errA);
+  assert.equal(v.phase, 'loading');
+  assert.equal(v.error, null);
+  assert.equal(v.canExport, false);
+});
+
+test('go() mở lượt tải mới mỗi lần chọn chương (kể cả cùng file)', () => {
+  const goBody = source.slice(source.indexOf('const go = useCallbackO('), source.indexOf('// Chọn theo routeChapter'));
+  assert.match(goBody, /setLoadSeq\(\s*n\s*=>\s*n\s*\+\s*1\s*\)/);
+  assert.match(source, /const loadKey = rdLoadKey\(filename, loadSeq\)/);
+  assert.match(source, /\}, \[filename, loadSeq\]\);/);
+});

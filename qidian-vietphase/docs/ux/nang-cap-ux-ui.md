@@ -360,6 +360,19 @@ Ngoài ra (mức nhẹ, đã sửa luôn): ô tìm chương ở 360px chỉ rộ
 
 Test hàm thuần của màn đọc: `node --test qidian-vietphase/frontend/tools/reader-storage.test.mjs` (localStorage hỏng nhiều kiểu, khôi phục vị trí, trạng thái tải khi đổi chương từ chương đã tải / chương lỗi / thử lại / file rỗng). Phần React (chốt lưu khi rời màn, focus thanh ẩn, màn Thuật ngữ) chưa kiểm headless ở đầu việc FIX: máy làm việc không có `uv` và Playwright.
 
+### 8.2c Lỗi review lượt 2 (đã sửa ở đầu việc FIX)
+
+| Màn | Heuristic | Lỗi | Cách sửa |
+|---|---|---|---|
+| Đọc | H1, H5 | A → B → A khi B chậm: khoá tải chỉ có `filename + lần thử`, nên lượt quay lại A khớp ngay nội dung/lỗi cũ của A, Sao chép/.txt xuất bản cũ trong lúc request mới chạy | Mỗi lượt chọn chương (`go()`) và mỗi lần thử lại tăng `loadSeq`; khoá tải là `filename + loadSeq` |
+| Đối chiếu | H5 | Mở 3 → 5 → 3 hay bấm «Thử lại» nhiều lần: response của lượt cũ cùng tên file vẫn được nhận; lúc vừa đổi chương, nội dung + `ready` của chương trước còn hiện và cho Sửa tới khi effect reset; mọi `404` bản gốc thành `ready` (chương văn bản mất file cho sửa và lưu bản rỗng) | Số thứ tự lượt tải riêng cho bản dịch/ảnh (`loadGenRef`) và bản gốc/phân đoạn (`srcGenRef`); dữ liệu gắn `dataKey = filename + reloadNonce`, render khác khoá thì coi là đang tải (không cho Sửa); `404` chỉ thành rỗng với chương ảnh (chưa OCR); lưu bản gốc xong mà đã sang chương khác thì không ghi đè state |
+| Đọc (router) | H3, H9 | Từ `#/…/output/999` bỏ số chương vẫn báo chương 999; đổi link lúc danh sách chương đang tải/lỗi bị bỏ qua; đoạn hash mã hoá sai làm `decodeURIComponent` ném lỗi, vỡ app | Route chưa xử lý được giữ lại tới khi danh sách «ready»; route không có số chương → bỏ báo lỗi, mở theo tiến độ đã lưu; `parseHash` giải mã an toàn, đoạn hỏng thành `null` |
+| Đọc | Truy cập (AA) | StatusBlock, nút ghost/secondary trong vùng đọc dùng `--fg-*` của app trên nền đọc: app tối + nền sáng cho tiêu đề `#f3f4f6` trên `#fcfaf6` (~1.06:1) | `reader.css` cho các phần tử nền trong suốt trong `.rd-scroll` dùng `--rd-fg/--rd-muted/--rd-border`; `check-contrast.mjs` đọc màu chữ khai báo trong `reader.css` và kiểm mọi tổ hợp theme app × nền đọc |
+| Đọc | H3, H7 | Chọn «Không chân» trong Aa mất sau khi tải lại (setter Tweaks chỉ báo cho host chỉnh thiết kế) | `app.jsx` lưu `fontReading` ở `vp:reader:font:v1` (try/catch, chỉ nhận `serif`/`sans`); Tweaks và Aa dùng cùng setter |
+| Script seed | An toàn dữ liệu | Liên kết tượng trưng dưới `--root` (thư mục trung gian hoặc file đích) làm script ghi chương gốc, `novel.md`, bản dịch hoặc mở DB ngoài root, kể cả ở `--mark-done/--unmark` | Kiểm mọi đường dẫn sẽ ghi/mở trước khi ghi bất cứ gì (`preflight`) và trước từng lần ghi (`ensure_inside`): realpath phải nằm trong root, không thành phần nào là liên kết (kể cả liên kết hỏng, file phụ `-wal/-shm/-journal` của SQLite) |
+
+Test: `node --test qidian-vietphase/frontend/tools/*.test.mjs` (thêm A → B → A và `app-route.test.mjs` cho hash mã hoá sai), `node qidian-vietphase/frontend/tools/check-contrast.mjs`, `cd qidian-vietphase && python3 -m unittest scripts/test_seed_ux_demo.py` (liên kết ở thư mục trung gian, file đích, DB, marker, chế độ `--mark-done/--unmark`). Phần React của đối chiếu và router chưa kiểm headless: máy làm việc không có Playwright/Chromium.
+
 ### 8.3 Mức trung bình / nhẹ chưa sửa → ticket sau
 
 | Màn | Mức | Vấn đề | Lý do chưa sửa |

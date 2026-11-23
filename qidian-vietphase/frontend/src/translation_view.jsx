@@ -28,16 +28,29 @@ function TranslationView({
   const [pageIdx, setPageIdx] = useStateT(0);
 
   // ── fetched (static) data ──────────────────────────────────────────
-  const [sourceText, setSourceText] = useStateT("");
-  const [segments, setSegments] = useStateT(null);   // pre-translate segments
-  const [subCount, setSubCount] = useStateT(0);
-  const [images, setImages] = useStateT([]);         // OCR image URLs
-  const [outputText, setOutputText] = useStateT("");
+  const [sourceTextS, setSourceText] = useStateT("");
+  const [segmentsS, setSegments] = useStateT(null);   // pre-translate segments
+  const [subCountS, setSubCount] = useStateT(0);
+  const [imagesS, setImages] = useStateT([]);         // OCR image URLs
+  const [outputTextS, setOutputText] = useStateT("");
   // Trạng thái tải bản gốc / bản dịch đã lưu: "loading" | "ready" | "error".
   // Khi chưa "ready" thì không cho Sửa — tránh lưu bản nháp rỗng đè lên file thật.
-  const [srcStatus, setSrcStatus] = useStateT("loading");
-  const [outStatus, setOutStatus] = useStateT("ready");
+  const [srcStatusS, setSrcStatus] = useStateT("loading");
+  const [outStatusS, setOutStatus] = useStateT("ready");
   const [reloadNonce, setReloadNonce] = useStateT(0);
+  // Dữ liệu trên thuộc lượt tải nào (chương + lần thử lại). Ngay khi đổi chương/thử lại,
+  // render đầu tiên đã coi là "đang tải" — không hiện hay cho sửa nội dung của lượt trước
+  // trong lúc chờ effect reset.
+  const [dataKey, setDataKey] = useStateT(null);
+  const viewKey = chapter ? `${chapter.filename}\n${reloadNonce}` : null;
+  const stale = dataKey !== viewKey;
+  const sourceText = stale ? "" : sourceTextS;
+  const segments = stale ? null : segmentsS;
+  const subCount = stale ? 0 : subCountS;
+  const images = stale ? [] : imagesS;
+  const outputText = stale ? "" : outputTextS;
+  const srcStatus = stale ? "loading" : srcStatusS;
+  const outStatus = stale ? (chapter?.status === "done" ? "loading" : "ready") : outStatusS;
 
   // ── run-OCR-on-existing-images state ───────────────────────────────
   const [ocrRunning, setOcrRunning] = useStateT(false);
@@ -49,9 +62,13 @@ function TranslationView({
   const ocrPollRef = useRefT(null);
   // Chương đang mở — response fetch về muộn của chương khác sẽ bị bỏ qua, tránh
   // hiện (rồi lỡ tay lưu) nội dung chương A dưới tên chương B.
+  // Thêm vào đó, mỗi lượt tải có số thứ tự riêng: mở 3 → 5 → 3 hay bấm «Thử lại» nhiều lần
+  // thì response của lượt cũ (cùng tên file) cũng bị bỏ.
   const currentFnRef = useRefT(null);
   currentFnRef.current = chapter?.filename ?? null;
   const isCurrent = (fn) => currentFnRef.current === fn;
+  const loadGenRef = useRefT(0);   // bản dịch, ảnh: tăng mỗi lần effect tải chương chạy
+  const srcGenRef = useRefT(0);    // bản gốc + phân đoạn: tăng mỗi lần loadSource chạy
 
   // Pane nào đang mở editor (chưa lưu) → hỏi trước khi đóng/chuyển chương.
   const editingRef = useRefT({});
@@ -71,26 +88,33 @@ function TranslationView({
     if (!chapter) return;
     const raw = chapter.filename;
     const fn = encodeURIComponent(raw);
+    const img = !!chapter.ocr_job_id;
+    const gen = ++srcGenRef.current;
+    const live = () => srcGenRef.current === gen && isCurrent(raw);
     fetch(`/api/chapters/${fn}/source`)
       .then(r => {
-        // 404: chương ảnh chưa OCR → chưa có file gốc, coi là rỗng chứ không phải lỗi.
-        if (r.status === 404) return { content: "" };
+        // 404 chỉ hợp lệ với chương ảnh chưa OCR (chưa có file gốc) → rỗng. Chương văn bản
+        // mất file gốc là lỗi, không được thành "ready" rồi cho sửa/lưu bản rỗng.
+        if (r.status === 404 && img) return { content: "" };
         return r.ok ? r.json() : Promise.reject(new Error(String(r.status)));
       })
-      .then(d => { if (isCurrent(raw)) { setSourceText((d && d.content) || ""); setSrcStatus("ready"); } })
-      .catch(() => { if (isCurrent(raw)) setSrcStatus(s => (s === "ready" ? s : "error")); });
+      .then(d => { if (live()) { setSourceText((d && d.content) || ""); setSrcStatus("ready"); } })
+      .catch(() => { if (live()) setSrcStatus(s => (s === "ready" ? s : "error")); });
     if (novelSlug) {
       fetch(`/api/chapters/${fn}/pretranslate?novel_slug=${encodeURIComponent(novelSlug)}`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => { if (d && isCurrent(raw)) { setSegments(d.segments || []); setSubCount(d.substitution_count || 0); } })
+        .then(d => { if (d && live()) { setSegments(d.segments || []); setSubCount(d.substitution_count || 0); } })
         .catch(() => {});
     }
-  }, [chapter?.filename, novelSlug]);
+  }, [chapter?.filename, chapter?.ocr_job_id, novelSlug]);
 
   useEffectT(() => {
     if (!chapter) return;
     const raw = chapter.filename;
     const fn = encodeURIComponent(raw);
+    const gen = ++loadGenRef.current;
+    const live = () => loadGenRef.current === gen && isCurrent(raw);
+    setDataKey(`${raw}\n${reloadNonce}`);
     setView(defaultView(isImage));
     setPageIdx(0);
     setSourceText(""); setSegments(null); setSubCount(0);
@@ -105,8 +129,8 @@ function TranslationView({
     if (chapter.status === "done") {
       fetch(`/api/chapters/${fn}/output`)
         .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
-        .then(d => { if (isCurrent(raw)) { setOutputText(((d && d.content) || "").replace(/\r\n/g, "\n")); setOutStatus("ready"); } })
-        .catch(() => { if (isCurrent(raw)) setOutStatus("error"); });
+        .then(d => { if (live()) { setOutputText(((d && d.content) || "").replace(/\r\n/g, "\n")); setOutStatus("ready"); } })
+        .catch(() => { if (live()) setOutStatus("error"); });
     }
 
     if (chapter.ocr_job_id && novelSlug) {
@@ -114,7 +138,7 @@ function TranslationView({
       fetch(`/api/ocr/${encodeURIComponent(novelSlug)}/${encodeURIComponent(job)}/images`)
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-          if (d && d.images && isCurrent(raw)) {
+          if (d && d.images && live()) {
             setImages(d.images.map(n => `/api/ocr/${encodeURIComponent(novelSlug)}/${encodeURIComponent(job)}/images/${encodeURIComponent(n)}`));
           }
         })
@@ -369,8 +393,10 @@ function TranslationView({
             onAddTerm={onAddTerm}
             onEditingChange={onEditingChange}
             onSaveSource={async (text) => {
+              const raw = chapter.filename;
               const ok = await onSaveSource?.(text);
               if (ok === false) return false;
+              if (!isCurrent(raw)) return true;   // đã sang chương khác trong lúc lưu
               setSourceText(text);
               loadSource();   // build lại pretranslate segments từ bản vừa lưu
               return true;

@@ -81,12 +81,18 @@ const api = {
 // Màn đọc dùng #/{slug}/output/{chương}, thêm /doi-chieu khi mở đối chiếu.
 const VALID_TABS = ["chapters", "glossary", "wiki", "output", "settings"];
 
+// Đoạn hash mã hoá sai (vd "%E0%A4%A") làm decodeURIComponent ném URIError → coi như không có.
+function safeDecodeHashPart(s) {
+  if (!s) return null;
+  try { return decodeURIComponent(s); } catch { return null; }
+}
+
 function parseHash() {
   const parts = (location.hash || "").replace(/^#\/?/, "").split("/");
   const tab = VALID_TABS.includes(parts[1]) ? parts[1] : "chapters";
-  const chapter = parts[2] ? decodeURIComponent(parts[2]) : null;
+  const chapter = safeDecodeHashPart(parts[2]);
   return {
-    slug: parts[0] ? decodeURIComponent(parts[0]) : null,
+    slug: safeDecodeHashPart(parts[0]),
     tab,
     readerChapter: tab === "output" ? chapter : null,
     chapter: tab !== "output" || parts[3] === "doi-chieu" ? chapter : null,
@@ -101,9 +107,28 @@ function buildHash(slug, tab, chapter, readerChapter) {
   return h;
 }
 
+// Kiểu chữ đọc lưu riêng (setTweak chỉ báo cho host chỉnh thiết kế, không tự lưu).
+const FONT_READING_KEY = "vp:reader:font:v1";
+const FONT_READING_VALUES = ["serif", "sans"];
+function loadFontReading() {
+  try {
+    const v = localStorage.getItem(FONT_READING_KEY);
+    if (FONT_READING_VALUES.includes(v)) return v;
+  } catch { /* Bộ nhớ bị chặn → dùng mặc định. */ }
+  return TWEAK_DEFAULTS.fontReading;
+}
+const APP_TWEAK_INITIAL = { ...TWEAK_DEFAULTS, fontReading: loadFontReading() };
+
 function App() {
   // ── Tweaks ───────────────────────────────────────────────────────────
-  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [tweaks, setTweak] = useTweaks(APP_TWEAK_INITIAL);
+
+  // Kiểu chữ đọc: Tweaks và bảng "Aa" cùng sửa giá trị này; lưu localStorage để tải lại vẫn giữ.
+  const setFontReading = useCbA((value) => {
+    if (!FONT_READING_VALUES.includes(value)) return;
+    setTweak("fontReading", value);
+    try { localStorage.setItem(FONT_READING_KEY, value); } catch { /* Vẫn áp dụng trong phiên này. */ }
+  }, [setTweak]);
 
   useEffectA(() => {
     document.documentElement.setAttribute("data-accent", tweaks.accent);
@@ -1065,7 +1090,7 @@ function App() {
               onOpenRail={() => setRailOpen(true)}
               suspendKeys={!!openChapter || cmdkOpen || railOpen || newOpen}
               fontMode={tweaks.fontReading}
-              onFontMode={value => setTweak("fontReading", value)}
+              onFontMode={setFontReading}
             />
           )}
 
@@ -1135,7 +1160,7 @@ function App() {
             label="Reading font"
             value={tweaks.fontReading}
             options={["serif", "sans"]}
-            onChange={v => setTweak("fontReading", v)}
+            onChange={setFontReading}
           />
         </TweakSection>
 

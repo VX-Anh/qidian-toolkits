@@ -386,6 +386,17 @@
   font-family: var(--font-ui);
   color: var(--rd-fg);
 }
+/* Phần tử nền trong suốt trong vùng đọc: dùng màu của nền đọc, không dùng --fg-* của app
+   (app tối + nền đọc sáng/sepia hay app sáng + nền đọc tối sẽ trượt AA).
+   Mỗi rule một dòng, tools/check-contrast.mjs đọc các rule này để kiểm cặp màu thực tế. */
+.rd-scroll .status-block-message { color: var(--rd-muted); }
+.rd-scroll .status-block-title { color: var(--rd-fg); }
+.rd-scroll .status-block-icon { color: var(--rd-muted); }
+.rd-scroll .status-block.error .status-block-icon { color: var(--rd-accent); }
+.rd-scroll .btn.ghost { color: var(--rd-muted); background: transparent; border-color: var(--rd-border); }
+.rd-scroll .btn.ghost:hover:not(:disabled) { color: var(--rd-fg); background: transparent; border-color: var(--rd-muted); }
+.rd-scroll .btn.secondary { color: var(--rd-fg); background: transparent; border-color: var(--rd-border); }
+.rd-scroll .btn.secondary:hover:not(:disabled) { color: var(--rd-fg); background: transparent; border-color: var(--rd-muted); }
 .rd-status-title { font-size: 16px; font-weight: 600; }
 .rd-status-desc { font-size: 13px; color: var(--rd-muted); overflow-wrap: anywhere; }
 .rd-status-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 4px; }
