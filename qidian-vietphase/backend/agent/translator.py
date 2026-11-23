@@ -34,11 +34,6 @@ def _make_registry(
                 result[t] = "CHƯA CÓ TRONG GLOSSARY"
         return str(result)
 
-    async def get_prev_summary(prev_filename: str) -> str:
-        """Lấy tóm tắt chương trước để đảm bảo liên tục."""
-        summary = state.get_summary(prev_filename)
-        return summary or "Không có tóm tắt chương trước."
-
     async def flag_unknown_term(zh_term: str, context: str) -> str:
         """Đánh dấu thuật ngữ chưa biết để ExtractorAgent xử lý sau."""
         await state.flag_term(zh_term, context, filename, novel_slug)
@@ -88,12 +83,23 @@ def _make_registry(
         return "Đã lưu tóm tắt."
 
     reg.register(lookup_glossary, "lookup_glossary", lookup_glossary.__doc__)
-    reg.register(get_prev_summary, "get_prev_summary", get_prev_summary.__doc__)
     reg.register(flag_unknown_term, "flag_unknown_term", flag_unknown_term.__doc__)
     reg.register(save_chapter, "save_chapter", save_chapter.__doc__)
     reg.register(save_summary, "save_summary", save_summary.__doc__)
 
     return reg
+
+
+def prev_summary(state: SharedState, filename: str, novel_slug: str) -> str | None:
+    """Tóm tắt chương liền trước (theo số chương) của cùng truyện, nếu đã có."""
+    info = state.get_chapter(filename) or {}
+    num = info.get("chapter_num") or 0
+    if num <= 1:
+        return None
+    for c in state.get_chapters(novel_slug):
+        if c.get("chapter_num") == num - 1:
+            return state.get_summary(c["filename"])
+    return None
 
 
 class TranslatorAgent(BaseAgent):
@@ -107,11 +113,14 @@ class TranslatorAgent(BaseAgent):
         client: anthropic.AsyncAnthropic,
         output_dir: Path,
         review_issues: str | None = None,
+        source_raw: str | None = None,
     ):
         self.filename = filename
         self.content = content
         self.profile = profile
         self.review_issues = review_issues
+        self.source_raw = source_raw   # bản gốc chưa thay tên: lọc bảng thuật ngữ trong prompt
+        self.prev = prev_summary(state, filename, novel_slug)
 
         reg = _make_registry(state, filename, novel_slug, output_dir, profile)
         super().__init__(
@@ -122,7 +131,7 @@ class TranslatorAgent(BaseAgent):
         )
 
     def _system_prompt(self) -> str:
-        return self.profile.system_prompt()
+        return self.profile.system_prompt(only_in=self.source_raw)
 
     async def run(self, _: str = "") -> AsyncIterator[AgentEvent]:
         user_msg = (
@@ -130,7 +139,8 @@ class TranslatorAgent(BaseAgent):
             "Dưới đây là toàn bộ nội dung:\n\n"
             + self.content.strip()
             + "\n\n---\n\n"
-            "Hướng dẫn:\n"
+            + (f"Tóm tắt chương trước (để giữ mạch truyện):\n{self.prev.strip()}\n\n" if self.prev else "")
+            + "Hướng dẫn:\n"
             "1. Tên riêng trong bảng thuật ngữ đã được thay sang tiếng Việt trước. Giữ nguyên các tên riêng tiếng Việt này khi dịch.\n"
             "2. Dùng flag_unknown_term cho bất kỳ danh từ riêng Trung nào còn sót chưa được dịch sẵn.\n"
             "3. Dịch toàn bộ nội dung, giữ nguyên số lượng đoạn văn.\n"

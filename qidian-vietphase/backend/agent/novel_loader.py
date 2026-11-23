@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from .hanviet import READINGS_SECTION, ReadingTable, build_table, parse_readings_section
+
 
 @dataclass
 class Term:
@@ -27,11 +29,18 @@ class NovelProfile:
     realms: list[Term] = field(default_factory=list)
     skills: list[Term] = field(default_factory=list)
     extra_notes: str = ""
+    # Mục "## Âm Hán-Việt": chữ → âm đã chốt (xem hanviet.py).
+    readings: dict[str, str] = field(default_factory=dict)
 
     def all_terms(self) -> list[Term]:
         return self.characters + self.places + self.realms + self.skills
 
-    def glossary_block(self) -> str:
+    def reading_table(self) -> ReadingTable:
+        return build_table(self.all_terms(), self.readings, person_terms=self.characters)
+
+    def glossary_block(self, only_in: str | None = None) -> str:
+        """Bảng thuật ngữ cho prompt. only_in: chỉ giữ mục có chữ Hán xuất hiện trong văn
+        bản này (bản gốc của chương) — đỡ nhiễu khi bảng lớn."""
         sections = [
             ("Nhân vật", self.characters),
             ("Địa danh", self.places),
@@ -40,6 +49,8 @@ class NovelProfile:
         ]
         lines = ["=== BẢNG THUẬT NGỮ (BẮT BUỘC TUÂN THEO) ==="]
         for title, terms in sections:
+            if only_in is not None:
+                terms = [t for t in terms if t.zh and t.zh in only_in]
             if not terms:
                 continue
             lines.append(f"\n[{title}]")
@@ -48,11 +59,11 @@ class NovelProfile:
                 lines.append(f"  {t.zh} → {t.vi}{note}")
         return "\n".join(lines)
 
-    def system_prompt(self) -> str:
+    def system_prompt(self, only_in: str | None = None) -> str:
         parts = [self.custom_prompt.strip()]
         if self.extra_notes.strip():
             parts.append(f"\n[Ghi chú về truyện]\n{self.extra_notes.strip()}")
-        parts.append(f"\n{self.glossary_block()}")
+        parts.append(f"\n{self.glossary_block(only_in)}")
         return "\n\n".join(parts)
 
     def to_dict(self) -> dict:
@@ -122,6 +133,7 @@ def load_novel(rules_dir: Path, slug: str) -> NovelProfile:
         realms=_parse_table(sections.get("Cảnh giới tu luyện", "")),
         skills=_parse_table(sections.get("Kỹ năng / Pháp thuật", "")),
         extra_notes=sections.get("Ghi chú thêm", ""),
+        readings=parse_readings_section(sections.get(READINGS_SECTION, "")),
     )
 
 
@@ -190,6 +202,33 @@ def _append_terms_locked(rules_dir: Path, slug: str, new_terms: list[dict]):
             content += "\n".join(rows) + "\n"
 
     write_novel_md(path, content)
+
+
+def append_readings_to_novel(rules_dir: Path, slug: str, readings: dict[str, str],
+                             note: str = "") -> None:
+    """Ghi âm Hán-Việt mới (chữ chưa có trong mục) vào cuối mục "## Âm Hán-Việt"."""
+    if not readings:
+        return
+    with NOVEL_MD_LOCK:
+        path = rules_dir / slug / "novel.md"
+        if not path.exists():
+            return
+        content = path.read_text(encoding="utf-8")
+        existing = parse_readings_section(_split_sections(content).get(READINGS_SECTION, ""))
+        rows = [f"| {ch} | {r} | {note} |" for ch, r in readings.items() if ch not in existing]
+        if not rows:
+            return
+        marker = f"## {READINGS_SECTION}"
+        if marker in content:
+            idx = content.index(marker) + len(marker)
+            nxt = re.search(r"\n## ", content[idx:])
+            at = idx + nxt.start() if nxt else len(content)
+            content = content[:at].rstrip("\n") + "\n" + "\n".join(rows) + "\n" + content[at:]
+        else:
+            content = (content.rstrip("\n") + f"\n\n{marker}\n\n"
+                       "Âm Hán-Việt đã chốt cho từng chữ (tự ghi khi gặp chữ mới; sửa ở đây để đổi).\n\n"
+                       "| Chữ | Âm | Ghi chú |\n|---|---|---|\n" + "\n".join(rows) + "\n")
+        write_novel_md(path, content)
 
 
 def _default_prompt() -> str:

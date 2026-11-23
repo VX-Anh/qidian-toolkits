@@ -62,6 +62,11 @@ def list_chapters(novel_slug: str | None = None):
             rev = reviews.get(ch["filename"])
             ch["review_status"] = rev["status"] if rev else None
             ch["review_issues"] = rev["issues"] if rev else None
+        names = state.get_name_checks(novel_slug)
+        for ch in chapters:
+            nc = names.get(ch["filename"])
+            ch["name_fixed"] = sum(f.get("count", 0) for f in nc["fixes"]) if nc else 0
+            ch["name_issues"] = nc["issues"] if nc else []
     return chapters
 
 
@@ -202,5 +207,7 @@ def save_output(filename: str, content: str = Body(..., embed=True)):
     path = Path(chapter["translated_path"])
     if not path.exists():
         raise HTTPException(404, "File output không tồn tại")
-    path.write_bytes(content.encode("utf-8"))
+    from .translate import novel_files_lock
+    with novel_files_lock(chapter.get("novel_slug") or ""):
+        path.write_bytes(content.encode("utf-8"))
     return {"ok": True}

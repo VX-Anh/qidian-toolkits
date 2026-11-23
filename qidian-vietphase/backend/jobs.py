@@ -40,7 +40,8 @@ class JobRegistry:
     def running(self, **match) -> list[str]:
         """job_id các job còn chạy có meta khớp mọi cặp key=value trong match."""
         out = []
-        for jid, task in self.tasks.items():
+        # Bản sao: có thể được gọi từ thread (thao tác tên riêng chạy trong threadpool).
+        for jid, task in list(self.tasks.items()):
             if task.done():
                 continue
             meta = self.meta.get(jid, {})

@@ -38,6 +38,13 @@ Each agent follows a **ReAct loop** in `backend/agent/base.py`: call Claude (`an
 - `backend/agent/translator.py` — TranslatorAgent: sends the whole chapter in one message (glossary names pre-substituted), injects NovelProfile.system_prompt()
 - `backend/agent/extractor.py` — ExtractorAgent: resolves flagged terms → appends to novel.md
 
+**Name consistency (proper nouns must read the same in every chapter):**
+- `backend/agent/hanviet.py` — per-novel Hán-Việt readings: learned from the glossary (person names, surname position preferred: 司 = Tư in 司奇 but Ty in 执司) plus the `## Âm Hán-Việt` section of novel.md (one char → one reading, wins). Polyphones already used with several readings are accepted, not forced; `conflicts()` lists them.
+- `backend/agent/name_scout.py` — before translating, the orchestrator scouts each chapter **sequentially in chapter order** (CLI when `TRANSLATE_PROVIDER=cli`, else API): the model lists proper nouns not yet in the glossary, code enforces known readings (`strict` for people), appends rows to novel.md (`tự động · chương N`) and new readings to `## Âm Hán-Việt`. Then chapters translate in parallel with every name pre-substituted. `NAME_SCOUT=false` disables; `SCOUT_MODEL` overrides the model.
+- `backend/agent/name_check.py` — after each translation (and `POST /api/names/{slug}/check`): auto-fix variants of a canonical name (diacritics / i-y, unique match), ≥3-syllable names differing by one syllable with the same first syllable and a unique candidate; report missing names (2-syllable or ambiguous) and leftover Hán characters. Stored in table `name_checks`, exposed as `name_fixed` / `name_issues` on `/api/chapters`.
+- `backend/routers/names.py` — report, check-all, rename preview/apply/undo (backups in `OUTPUT_DIR/.name-backups/<slug>/<id>/`). The UI offers "apply to translated chapters" after a glossary vi name is edited.
+- Reviewer no longer judges names; it only flags omissions, leftover Hán, clear mistranslations.
+
 **Data flow:**
 - Input: `$INPUT_DIR/*.txt` — filename encodes chapter number: `第675章 天演.txt`
 - Output: `$OUTPUT_DIR/{novel_slug}/Chuong_{num:04d}_{vi_title}.txt`

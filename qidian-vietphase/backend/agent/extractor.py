@@ -6,7 +6,7 @@ import anthropic
 
 from ..config import settings
 from .base import BaseAgent, AgentEvent
-from .novel_loader import append_terms_to_novel
+from .novel_loader import append_readings_to_novel, append_terms_to_novel, load_novel
 from .state import SharedState
 from .tools import ToolRegistry
 
@@ -27,6 +27,14 @@ def _make_registry(state: SharedState, rules_dir: Path, slug: str) -> ToolRegist
         """Thêm một thuật ngữ vào novel.md. category: character|place|realm|skill|other"""
         if category not in CATEGORIES:
             category = "character"
+        # Cùng luật âm Hán-Việt với bước dò tên: tên người theo âm đã dùng trong truyện,
+        # chữ mới thì ghi âm vào mục "Âm Hán-Việt".
+        try:
+            table = load_novel(rules_dir, slug).reading_table()
+            vi_term, learned = table.enforce(zh_term, vi_term, strict=(category == "character"))
+            append_readings_to_novel(rules_dir, slug, learned, "tự động · trích thuật ngữ")
+        except FileNotFoundError:
+            pass
         # Ghi novel.md NGAY rồi mới đánh resolved — trước đây term chỉ nằm trong bộ
         # nhớ chờ flush_to_novel, agent dừng giữa chừng (MAX_ITER, 429) là mất term
         # trong khi DB đã đánh resolved.

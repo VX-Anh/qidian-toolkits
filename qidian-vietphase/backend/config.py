@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     cli_timeout: int = 900
     # CLI lỗi (chưa đăng nhập, hết hạn mức, quá giờ) → dịch lại chương đó bằng API.
     cli_fallback_api: bool = True
+    # Dò tên riêng trước khi dịch (name_scout.py): model dùng (rỗng = MODEL_TRANSLATE),
+    # đi qua CLI khi TRANSLATE_PROVIDER=cli. NAME_SCOUT=false để tắt.
+    name_scout: bool = True
+    scout_model: str = ""
     # Streaming nên đặt rộng (chương dài + phần thinking); chạm trần → chương FAILED.
     max_output_tokens: int = 64000
 

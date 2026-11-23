@@ -7,7 +7,7 @@ function ChaptersScreen({
   filter, onFilter,
   checked, onToggleCheck, onSelectAll, onClearSel,
   onTranslateAll, onTranslateSelected, onCancel, onRetry,
-  onOpenChapter, onUpload, onUploadImages, onImportFolder, ocrBanner,
+  onOpenChapter, onUpload, onUploadImages, onImportFolder, ocrBanner, onCheckNames,
 }) {
   const visible = useMemoC(() => {
     return chapters.filter(c => {
@@ -58,6 +58,12 @@ function ChaptersScreen({
                 <Icon name="play" size={12} />
                 {isRunning ? "Đang dịch…" : "Dịch tất cả"}
               </button>
+              {onCheckNames && chapters.some(c => c.status === "done") && (
+                <button className="btn ghost" onClick={onCheckNames} disabled={isRunning}
+                  title="Kiểm tên riêng mọi chương đã dịch theo bảng thuật ngữ, tự sửa chỗ chắc chắn">
+                  <Icon name="check" size={13} /> Kiểm tên
+                </button>
+              )}
               {chapters.some(c => c.status === "failed") && (
                 <button className="btn" onClick={onRetry}>
                   <Icon name="refresh" size={13} />
@@ -301,6 +307,19 @@ function ChapterRow({ ch, checked, onToggle, onOpen }) {
       </td>
       <td style={{ textAlign: "right" }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+          {(ch.name_issues?.length > 0 || ch.name_fixed > 0) && (
+            <span
+              className={`src-chip ${ch.name_issues?.length ? "image" : ""}`}
+              title={[
+                ch.name_fixed ? `Đã tự sửa ${ch.name_fixed} chỗ tên riêng` : "",
+                ...(ch.name_issues || []).map(i => `• ${i.detail}`),
+              ].filter(Boolean).join("\n")}
+            >
+              {ch.name_issues?.length
+                ? <><Icon name="alert" size={9} /> Tên: {ch.name_issues.length}</>
+                : <>Tên: sửa {ch.name_fixed}</>}
+            </span>
+          )}
           {ch.review_status === "needs_fix" && (
             <span className="src-chip image" title={ch.review_issues || "Cần sửa"}>
               <Icon name="alert" size={9} /> Cần sửa

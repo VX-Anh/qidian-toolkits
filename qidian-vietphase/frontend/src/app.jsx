@@ -758,26 +758,92 @@ function App() {
   // ── Glossary edit / delete ───────────────────────────────────────────
   const glossRow = (it) => `| ${it.zh} | ${it.vi} | ${it.notes || ""} |`;
 
+  // Trả true khi lưu xong (trình sửa đóng), false khi lỗi/huỷ (giữ bản nháp).
   async function onEditGloss(cat, oldItem, newItem) {
-    if (!currentSlug) return;
+    if (!currentSlug) return false;
     if (!newItem.zh || !newItem.vi) {
       setToast({ msg: "Cần nhập cả tiếng Trung và tiếng Việt", type: "error" });
-      return;
+      return false;
     }
+    const slug = currentSlug;
+    const oldVi = (oldItem.vi || "").trim();
+    const newVi = newItem.vi.trim();
+    const renaming = !!oldVi && oldVi !== newVi;
     try {
-      const rawData = await api.get(`/api/novels/${currentSlug}/raw`);
-      const oldRow = glossRow(oldItem).trim();
-      const newRow = glossRow(newItem);
-      const lines = rawData.content.split("\n");
-      const idx = lines.findIndex(l => l.trim() === oldRow);
-      if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
-      lines[idx] = newRow;
-      await api.put(`/api/novels/${encodeURIComponent(currentSlug)}/raw`, { content: lines.join("\n"), version: rawData.version });
-      await loadGlossary(currentSlug);
-      await loadNovelMd(currentSlug);
-      setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
+      // Đổi tên Việt: hỏi trước. Đồng ý → (1) lưu phần khác của dòng (chữ Hán, ghi chú) với
+      // tên CŨ, rồi (2) máy chủ đổi tên trong bản dịch + bảng + âm đã chốt trong MỘT lần có
+      // sao lưu — hash sau cùng khớp, hoàn tác được. Từ chối → chỉ sửa dòng trong bảng.
+      let apply = false;
+      if (renaming) {
+        const pv = await previewRename(slug, oldVi, newVi);
+        apply = pv.total ? confirmRename(pv, oldVi, newVi) : true;
+      }
+      const target = apply ? { ...newItem, vi: oldVi } : newItem;
+      await replaceGlossRow(slug, oldItem, target);
+      if (apply) {
+        let r;
+        try {
+          r = await api.post(`/api/names/${encodeURIComponent(slug)}/rename/apply`,
+                             { old_vi: oldVi, new_vi: newVi });
+        } catch (err) {
+          // Đổi tên lỗi (vd đang dịch) → trả dòng về như cũ để bảng không đổi nửa vời và
+          // trình sửa (so theo zh/vi/ghi chú) vẫn giữ bản nháp.
+          await replaceGlossRow(slug, target, oldItem).catch(() => {});
+          throw err;
+        }
+        if (r.files) setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
+        await loadChapters(slug);
+      }
+      await loadGlossary(slug);
+      await loadNovelMd(slug);
+      if (!apply || !renaming) setToast({ msg: "Đã cập nhật thuật ngữ", type: "success" });
+      return true;
     } catch (err) {
+      await loadGlossary(slug).catch(() => {});
       setToast({ msg: `Lỗi sửa thuật ngữ: ${err.message}`, type: "error" });
+      return false;
+    }
+  }
+
+  async function replaceGlossRow(slug, oldItem, newItem) {
+    const oldRow = glossRow(oldItem).trim();
+    const newRow = glossRow(newItem);
+    if (oldRow === newRow.trim()) return;
+    const rawData = await api.get(`/api/novels/${slug}/raw`);
+    const lines = rawData.content.split("\n");
+    const idx = lines.findIndex(l => l.trim() === oldRow);
+    if (idx === -1) throw new Error("Không tìm thấy dòng thuật ngữ trong novel.md");
+    lines[idx] = newRow;
+    await api.put(`/api/novels/${encodeURIComponent(slug)}/raw`, { content: lines.join("\n"), version: rawData.version });
+  }
+
+  function previewRename(slug, oldVi, newVi) {
+    return api.post(`/api/names/${encodeURIComponent(slug)}/rename/preview`, { old_vi: oldVi, new_vi: newVi });
+  }
+
+  function confirmRename(pv, oldVi, newVi) {
+    const list = pv.chapters.slice(0, 8).map(c => `• Chương ${c.chapter_num}: ${c.count} chỗ`).join("\n");
+    const more = pv.chapters.length > 8 ? `\n… và ${pv.chapters.length - 8} chương khác` : "";
+    const keep = pv.protected?.length ? `\n\nGiữ nguyên trong tên dài hơn: ${pv.protected.join(", ")}` : "";
+    return window.confirm(
+      `Áp dụng «${oldVi}» → «${newVi}» cho ${pv.total} chỗ trong ${pv.chapters.length} chương đã dịch?\n\n${list}${more}${keep}\n\nBản dịch cũ được sao lưu trên máy chủ. Chọn Huỷ để chỉ sửa trong bảng thuật ngữ.`
+    );
+  }
+
+  // Kiểm + tự sửa tên riêng cho mọi chương đã dịch của truyện.
+  async function onCheckNames() {
+    if (!currentSlug) return;
+    const slug = currentSlug;
+    try {
+      setToast({ msg: "Đang kiểm tên riêng…", type: "info" });
+      const r = await api.post(`/api/names/${encodeURIComponent(slug)}/check`, {});
+      await loadChapters(slug);
+      setToast({
+        msg: `Đã kiểm ${r.checked} chương: tự sửa ${r.fixed} chỗ, ${r.issues} vấn đề cần xem`,
+        type: r.issues ? "info" : "success",
+      });
+    } catch (err) {
+      setToast({ msg: `Lỗi kiểm tên: ${err.message}`, type: "error" });
     }
   }
 
@@ -1046,6 +1112,7 @@ function App() {
               onSelectAll={selectAll}
               onClearSel={clearSel}
               onTranslateAll={() => startTranslation(null)}
+              onCheckNames={onCheckNames}
               onTranslateSelected={() => {
                 const selected = Object.keys(checked).filter(k => checked[k]);
                 startTranslation(selected);
