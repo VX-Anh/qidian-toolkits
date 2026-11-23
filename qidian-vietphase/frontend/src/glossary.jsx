@@ -9,7 +9,7 @@ const GLOSS_CATS = [
   { id: "skills",     label: "Pháp thuật / Kỹ năng", icon: "zap" },
 ];
 
-function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtracting }) {
+function GlossaryScreen({ glossary, status = "ready", onReload, onAdd, onEdit, onDelete, onExtract, isExtracting }) {
   const [cat, setCat] = useStateG("characters");
   const [q, setQ] = useStateG("");
   const [showAdd, setShowAdd] = useStateG(false);
@@ -186,7 +186,20 @@ function GlossaryScreen({ glossary, onAdd, onEdit, onDelete, onExtract, isExtrac
               ))}
               {items.length === 0 && (
                 <tr><td colSpan={4} style={{ padding: 0 }}>
-                  {q ? (
+                  {status === "loading" ? (
+                    <StatusBlock kind="loading" title="Đang tải thuật ngữ…" />
+                  ) : status === "error" ? (
+                    <StatusBlock
+                      kind="error"
+                      title="Không tải được thuật ngữ"
+                      desc={typeof navigator !== "undefined" && navigator.onLine === false
+                        ? "Mất kết nối mạng. Kiểm tra mạng rồi thử lại."
+                        : "Máy chủ không phản hồi. Thử lại sau giây lát."}
+                      actions={onReload && (
+                        <button className="btn sm" onClick={onReload}><Icon name="refresh" size={12} /> Thử lại</button>
+                      )}
+                    />
+                  ) : q ? (
                     <StatusBlock
                       kind="empty"
                       title="Không tìm thấy thuật ngữ"

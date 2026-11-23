@@ -143,6 +143,8 @@ function App() {
   const [chaptersStatus, setChaptersStatus] = useStateA("loading");
   const [chapters, setChapters] = useStateA([]);
   const [glossary, setGlossary] = useStateA({ characters: [], places: [], realms: [], skills: [] });
+  const [glossaryStatus, setGlossaryStatus] = useStateA("loading");
+  const glossarySlugRef = useRefA(null);   // glossary đang hiện thuộc truyện nào
   const [wikiEntities, setWikiEntities] = useStateA([]);
   const [wikiStatus, setWikiStatus] = useStateA("loading");
   const [novelMd, setNovelMd] = useStateA("");
@@ -257,13 +259,19 @@ function App() {
     try {
       const data = await api.get(`/api/novels/${encodeURIComponent(slug)}`);
       if (currentSlugRef.current !== slug) return;
+      glossarySlugRef.current = slug;
       setGlossary({
         characters: data.characters || [],
         places:     data.places     || [],
         realms:     data.realms     || [],
         skills:     data.skills     || [],
       });
-    } catch { /* ignore */ }
+      setGlossaryStatus("ready");
+    } catch {
+      // Nạp lại nền thất bại khi đã có dữ liệu của đúng truyện: giữ nguyên.
+      // Chưa có gì của truyện này → báo lỗi (không hiện như danh sách rỗng).
+      if (currentSlugRef.current === slug && glossarySlugRef.current !== slug) setGlossaryStatus("error");
+    }
   }
 
   // novel.md đang sửa trong Settings: nhớ nó thuộc truyện nào, version lúc tải, và
@@ -405,6 +413,7 @@ function App() {
     setNovelMd("");
     setNovelMdStatus("loading");
     setWikiStatus("loading");
+    if (glossarySlugRef.current !== currentSlug) setGlossaryStatus("loading");
     loadChapters(currentSlug);
     loadGlossary(currentSlug);
     loadNovelMd(currentSlug);
@@ -877,6 +886,8 @@ function App() {
     setChaptersStatus("loading");
     setChapters([]);
     setGlossary({ characters: [], places: [], realms: [], skills: [] });
+    glossarySlugRef.current = null;
+    setGlossaryStatus("loading");
     setWikiEntities([]);
     setWikiStatus("loading");
     setChecked({});
@@ -1021,6 +1032,8 @@ function App() {
           {tab === "glossary" && (
             <GlossaryScreen
               glossary={glossary}
+              status={glossaryStatus}
+              onReload={() => { if (currentSlug) { setGlossaryStatus("loading"); loadGlossary(currentSlug); } }}
               onAdd={onAddGloss}
               onEdit={onEditGloss}
               onDelete={onDeleteGloss}

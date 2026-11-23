@@ -31,35 +31,75 @@ function rdSave(key, value) {
   try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* bộ nhớ bị chặn/đầy — bỏ qua */ }
 }
 
+// Chỉ nhận số thật (typeof number). Không gọi Number(): JSON hợp lệ như
+// {"valueOf":null,"toString":null} làm Number() ném TypeError, còn [18] hay "18" bị ép thành số.
+function rdNum(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : NaN;
+}
+
 // Giá trị hỏng / ngoài khoảng → dùng mặc định từng trường.
 function rdSanitizePrefs(p) {
   const out = { ...RD_PREFS_DEFAULT };
-  if (!p || typeof p !== "object") return out;
-  const size = Number(p.size);
-  if (Number.isFinite(size) && size >= RD_SIZE_MIN && size <= RD_SIZE_MAX) out.size = Math.round(size);
-  const lh = Number(p.lh);
+  if (!p || typeof p !== "object" || Array.isArray(p)) return out;
+  const size = rdNum(p.size);
+  if (size >= RD_SIZE_MIN && size <= RD_SIZE_MAX) out.size = Math.round(size);
+  const lh = rdNum(p.lh);
   if (RD_LH_OPTIONS.includes(lh)) out.lh = lh;
-  if (RD_BG_OPTIONS.some(o => o.v === p.bg)) out.bg = p.bg;
+  if (typeof p.bg === "string" && RD_BG_OPTIONS.some(o => o.v === p.bg)) out.bg = p.bg;
   return out;
 }
 
+// Tiến độ: { num, filename, para (đoạn đầu đang thấy), pin (tỉ lệ đã cuộn trong đoạn đó), frac }.
+// Số chương hỏng → bỏ cả tiến độ; trường vị trí hỏng → 0.
 function rdLoadProgress(slug) {
   if (!slug) return null;
   const p = rdLoad(RD_PROGRESS_PREFIX + slug);
-  if (!p || typeof p !== "object") return null;
-  const num = Number(p.num);
+  if (!p || typeof p !== "object" || Array.isArray(p)) return null;
+  const num = rdNum(p.num);
   if (!Number.isFinite(num)) return null;
-  const para = Number(p.para);
-  const frac = Number(p.frac);
+  const para = rdNum(p.para);
+  const frac = rdNum(p.frac);
+  const pin = rdNum(p.pin);
   return {
     num,
     filename: typeof p.filename === "string" ? p.filename : null,
     para: Number.isInteger(para) && para >= 0 ? para : 0,
-    frac: Number.isFinite(frac) && frac >= 0 && frac <= 1 ? frac : 0,
+    frac: frac >= 0 && frac <= 1 ? frac : 0,
+    pin: pin >= 0 && pin <= 1 ? pin : 0,
   };
 }
 
+// scrollTop cần đặt khi khôi phục. Tìm thấy đoạn → đầu đoạn + phần đã cuộn trong đoạn
+// (đoạn dài nhiều màn hình không bị kéo về đầu đoạn); không thấy → tỉ lệ cuộn cả chương.
+function rdRestoreTop({ paraTop, paraHeight, pin, frac, max, offset }) {
+  let top;
+  if (typeof paraTop === "number") top = paraTop + (pin || 0) * (paraHeight || 0) - offset;
+  else top = (frac || 0) * max;
+  return Math.round(Math.min(Math.max(0, max), Math.max(0, top)));
+}
+
+// Nội dung, lỗi và quyền xuất gắn với đúng một lần tải (chương + lần thử lại).
+function rdLoadKey(filename, nonce) {
+  return filename ? `${filename}\n${nonce}` : null;
+}
+
+function rdViewState(filename, key, res) {
+  if (!filename) return { phase: "idle", content: "", error: null, canExport: false };
+  if (!res || res.key !== key) return { phase: "loading", content: "", error: null, canExport: false };
+  if (res.error) return { phase: "error", content: "", error: res.error, canExport: false };
+  const content = typeof res.content === "string" ? res.content : "";
+  if (!content.trim()) return { phase: "empty", content: "", error: null, canExport: false };
+  return { phase: "ready", content, error: null, canExport: true };
+}
+
 // ── Tiện ích ───────────────────────────────────────────────────────────────────
+const RD_TOP_OFFSET = 72;   // chừa chỗ cho thanh trên khi đo/khôi phục vị trí
+
+// Vị trí đầu phần tử trong vùng cuộn (không phụ thuộc offsetParent).
+function rdParaTop(box, el) {
+  return el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+}
+
 function rdIsTyping(el) {
   if (!el) return false;
   const tag = el.tagName;
@@ -128,9 +168,7 @@ function OutputScreen({
   // Chương đang đọc (giữ bản chụp để vẫn hiện khi chương rời khỏi danh sách done).
   const [cur, setCur] = useStateO(null);
   const [missing, setMissing] = useStateO(null);   // { num } khi routeChapter không đọc được
-  const [content, setContent] = useStateO("");
-  const [loading, setLoading] = useStateO(false);
-  const [error, setError] = useStateO(null);       // { msg, offline }
+  const [loadRes, setLoadRes] = useStateO(null);   // { key, content, error: { msg, offline } | null }
   const [retryNonce, setRetryNonce] = useStateO(0);
   const [copied, setCopied] = useStateO("");
 
@@ -142,9 +180,10 @@ function OutputScreen({
   const [barsHidden, setBarsHidden] = useStateO(false);
 
   const scrollRef = useRefO(null);
-  const restoreRef = useRefO(null);     // { filename, para, frac } chờ khôi phục sau khi render
+  const restoreRef = useRefO(null);     // { filename, para, pin, frac } chờ khôi phục sau khi render
   const initRef = useRefO(false);
   const saveTimer = useRefO(null);
+  const saveFnRef = useRefO(null);      // hàm lưu vị trí của chương đang hiện (chờ chạy)
   const lastTopRef = useRefO(0);
   const tocBtnRef = useRefO(null);
   const tocCloseRef = useRefO(null);
@@ -153,14 +192,29 @@ function OutputScreen({
   const tocListRef = useRefO(null);
 
   const filename = cur?.filename || null;
+  const loadKey = rdLoadKey(filename, retryNonce);
+  // Suy ra ngay trong render: đổi chương / thử lại thì lần render đầu đã là "loading",
+  // không ghép tiêu đề chương mới với nội dung hay lỗi của lần tải trước.
+  const view = rdViewState(filename, loadKey, loadRes);
+  const content = view.content;
+  const error = view.error;
   const curNum = cur?.chapter_num;
   const curStillDone = !!cur && done.some(c => c.filename === cur.filename);
   const prevCh = cur ? [...done].reverse().find(c => c.chapter_num < curNum) || null : null;
   const nextCh = cur ? done.find(c => c.chapter_num > curNum) || null : null;
 
+  // Lưu ngay vị trí đang chờ (debounce) của chương đang hiện, khi DOM còn đó.
+  const flushSave = useCallbackO(() => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    const fn = saveFnRef.current;
+    if (fn && fn.pending) { fn.pending = false; fn(); }
+  }, []);
+
   // ── Chuyển chương ────────────────────────────────────────────────────────────
   const go = useCallbackO((ch, { restore = null, notify = true } = {}) => {
     if (!ch) return;
+    flushSave();   // chốt tiến độ chương đang rời đi trước khi ghi tiến độ chương mới
+    saveFnRef.current = null;   // closure của chương cũ không được ghi nữa (kể cả lúc dọn dẹp)
     restoreRef.current = restore ? { filename: ch.filename, ...restore } : null;
     setMissing(null);
     setCur(ch);
@@ -171,7 +225,7 @@ function OutputScreen({
       rdSave(RD_PROGRESS_PREFIX + slug, { num: ch.chapter_num, filename: ch.filename, para: 0, frac: 0, at: Date.now() });
     }
     if (notify && onReadChapter) onReadChapter(ch.chapter_num);
-  }, [slug, onReadChapter]);
+  }, [slug, onReadChapter, flushSave]);
 
   // Chọn theo routeChapter → tiến độ đã nhớ → chương done đầu tiên.
   const resolve = useCallbackO((route) => {
@@ -180,14 +234,14 @@ function OutputScreen({
       const hit = Number.isFinite(n) ? done.find(c => c.chapter_num === n) : null;
       if (!hit) { setCur(null); setMissing({ num: route }); return; }
       const prog = rdLoadProgress(slug);
-      go(hit, { restore: prog && prog.num === hit.chapter_num ? { para: prog.para, frac: prog.frac } : null, notify: false });
+      go(hit, { restore: prog && prog.num === hit.chapter_num ? { para: prog.para, pin: prog.pin, frac: prog.frac } : null, notify: false });
       return;
     }
     if (!done.length) return;
     const prog = rdLoadProgress(slug);
     if (prog) {
       const same = done.find(c => c.chapter_num === prog.num);
-      if (same) { go(same, { restore: { para: prog.para, frac: prog.frac } }); return; }
+      if (same) { go(same, { restore: { para: prog.para, pin: prog.pin, frac: prog.frac } }); return; }
       go(rdNearest(done, prog.num));   // chương đã nhớ không còn bản dịch → chương gần nhất
       return;
     }
@@ -231,11 +285,9 @@ function OutputScreen({
 
   // ── Tải nội dung: chỉ phụ thuộc filename + retry ─────────────────────────────
   useEffectO(() => {
-    if (!filename) { setContent(""); setError(null); setLoading(false); return; }
+    if (!filename) return;
     let alive = true;   // đổi chương nhanh → bỏ response cũ
-    setLoading(true);
-    setContent("");
-    setError(null);
+    const key = loadKey;
     fetch(`/api/chapters/${encodeURIComponent(filename)}/output`)
       .then(async r => {
         if (!r.ok) {
@@ -247,16 +299,16 @@ function OutputScreen({
       })
       .then(d => {
         if (!alive) return;
-        setContent((d.content || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
-        setLoading(false);
+        const text = typeof d?.content === "string" ? d.content : "";
+        setLoadRes({ key, content: text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"), error: null });
       })
       .catch(err => {
         if (!alive) return;
         const offline = typeof navigator !== "undefined" && navigator.onLine === false;
-        setError({ msg: err?.message || "Lỗi không rõ", offline });
-        setLoading(false);
+        setLoadRes({ key, content: "", error: { msg: err?.message || "Lỗi không rõ", offline } });
       });
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filename, retryNonce]);
 
   // Có mạng lại → tự thử lại.
@@ -281,29 +333,48 @@ function OutputScreen({
     restoreRef.current = null;
     if (!r || r.filename !== filename) { box.scrollTop = 0; return; }
     const el = box.querySelector(`[data-para="${r.para}"]`);
-    if (el && r.para > 0) box.scrollTop = Math.max(0, el.offsetTop - 72);
-    else if (r.frac > 0) box.scrollTop = r.frac * (box.scrollHeight - box.clientHeight);
+    box.scrollTop = rdRestoreTop({
+      paraTop: el ? rdParaTop(box, el) : null,
+      paraHeight: el ? el.offsetHeight : 0,
+      pin: r.pin, frac: r.frac,
+      max: box.scrollHeight - box.clientHeight,
+      offset: RD_TOP_OFFSET,
+    });
     lastTopRef.current = box.scrollTop;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paras]);
 
   // ── Lưu vị trí khi cuộn (~400ms) + ẩn/hiện thanh trên mobile ─────────────────
-  useEffectO(() => {
+  // useLayoutEffect: phần dọn dẹp chạy trước khi DOM bị gỡ (đổi truyện/tab), nên
+  // lần lưu đang chờ vẫn đo được vị trí thật thay vì bị huỷ.
+  useLayoutEffectO(() => {
     const box = scrollRef.current;
     if (!box) return;
     const save = () => {
       saveTimer.current = null;
-      if (!slug || !cur || !paras.length) return;
+      if (!slug || !cur || !paras.length || !box.isConnected) return;
+      // Chỉ đo khi DOM đang hiện đúng chương này (dọn dẹp sau khi DOM đã đổi thì bỏ qua).
+      const page = box.querySelector(".rd-page");
+      if (!page || page.dataset.file !== cur.filename) return;
       const top = box.scrollTop;
-      let para = 0;
+      const boxTop = box.getBoundingClientRect().top;
+      let para = 0, pin = 0;
       const nodes = box.querySelectorAll("[data-para]");
       for (const el of nodes) {
-        if (el.offsetTop + el.offsetHeight > top + 72) { para = Number(el.dataset.para) || 0; break; }
+        const r = el.getBoundingClientRect();
+        const elTop = r.top - boxTop + top;
+        if (elTop + r.height > top + RD_TOP_OFFSET) {
+          para = Number(el.dataset.para) || 0;
+          pin = r.height > 0 ? Math.min(1, Math.max(0, (top + RD_TOP_OFFSET - elTop) / r.height)) : 0;
+          break;
+        }
       }
       const max = box.scrollHeight - box.clientHeight;
       const frac = max > 0 ? Math.min(1, Math.max(0, top / max)) : 0;
-      rdSave(RD_PROGRESS_PREFIX + slug, { num: cur.chapter_num, filename: cur.filename, para, frac, at: Date.now() });
+      rdSave(RD_PROGRESS_PREFIX + slug, { num: cur.chapter_num, filename: cur.filename, para, pin, frac, at: Date.now() });
     };
+    save.pending = false;
+    saveFnRef.current = save;
     const onScroll = () => {
       const top = box.scrollTop;
       const dy = top - lastTopRef.current;
@@ -311,15 +382,24 @@ function OutputScreen({
         setBarsHidden(dy > 0 && top > 80);
         lastTopRef.current = top;
       }
-      if (!saveTimer.current) saveTimer.current = setTimeout(save, 400);
+      save.pending = true;
+      if (!saveTimer.current) saveTimer.current = setTimeout(() => { save.pending = false; save(); }, 400);
     };
+    // Đóng tab / chuyển app trên điện thoại trong vòng 400ms sau lần cuộn cuối.
+    const onHide = () => { if (document.visibilityState !== "visible") flushSave(); };
     box.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("pagehide", flushSave);
+    document.addEventListener("visibilitychange", onHide);
     return () => {
       box.removeEventListener("scroll", onScroll);
-      // Không lưu ở đây: closure cũ có thể ghi đè tiến độ của chương vừa chuyển tới.
-      if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+      window.removeEventListener("pagehide", flushSave);
+      document.removeEventListener("visibilitychange", onHide);
+      // Chuyển chương qua go() đã chốt (và xoá hàng chờ) trước khi ghi chương mới, nên
+      // ở đây chỉ còn lần lưu của chính chương này: rời màn, đổi truyện, cập nhật danh sách.
+      flushSave();
+      if (saveFnRef.current === save) saveFnRef.current = null;
     };
-  }, [slug, cur, paras]);
+  }, [slug, cur, paras, flushSave]);
 
   // ── Bàn phím: ←/→ chuyển chương, Esc đóng bảng Aa / mục lục ─────────────────
   useEffectO(() => {
@@ -371,7 +451,7 @@ function OutputScreen({
     });
   };
 
-  const canExport = !!content && !loading && !error;
+  const canExport = view.canExport;
 
   const copyToClipboard = () => {
     if (!canExport) return;
@@ -405,6 +485,9 @@ function OutputScreen({
 
   const toggleToc = () => setTocOpen(o => !o);
   const closeToc = () => { setTocOpen(false); tocBtnRef.current?.focus(); };
+
+  // Focus (Tab/Shift+Tab) đi vào thanh đang ẩn → hiện lại, không để focus nằm ngoài màn.
+  const showBars = () => { if (barsHidden) setBarsHidden(false); };
 
   // Chạm vào vùng đọc khi thanh đang ẩn → hiện lại.
   const onBodyClick = (e) => {
@@ -452,7 +535,7 @@ function OutputScreen({
     // Danh sách vừa "ready" nhưng effect chọn chương chưa chạy (render đầu tiên):
     // chưa có chương nào để hiện — không được rơi xuống nhánh dùng cur.chapter_num.
     body = <RdStatus kind="loading" title="Đang mở chương…" />;
-  } else if (loading || (!content && !error)) {
+  } else if (view.phase === "loading") {
     body = (
       <div className="rd-loading">
         <RdStatus kind="loading" title={`Đang tải chương ${cur?.chapter_num ?? ""}…`} />
@@ -460,6 +543,15 @@ function OutputScreen({
           <span className="skeleton" /><span className="skeleton" /><span className="skeleton" /><span className="skeleton short" />
         </div>
       </div>
+    );
+  } else if (view.phase === "empty") {
+    body = (
+      <RdStatus kind="empty" title={`Chương ${cur.chapter_num} chưa có nội dung`}
+        desc="File bản dịch của chương này đang trống. Thử tải lại, hoặc mở đối chiếu để kiểm tra."
+        actions={<>
+          {btn("Tải lại", () => setRetryNonce(n => n + 1), "secondary", "refresh")}
+          {nextCh && btn(`Đọc chương ${nextCh.chapter_num}`, () => go(nextCh), "primary", "next")}
+        </>} />
     );
   } else if (error) {
     body = (
@@ -470,7 +562,7 @@ function OutputScreen({
     );
   } else {
     body = (
-      <article className="rd-page" lang="vi">
+      <article className="rd-page" lang="vi" data-file={cur.filename}>
         {!curStillDone && (
           <div className="rd-note" role="status">
             Chương này đang được dịch lại hoặc không còn bản dịch — đang hiện bản đã tải.
@@ -547,7 +639,7 @@ function OutputScreen({
 
       <div className="rd-main">
         {/* Thanh trên */}
-        <div className="rd-bar rd-top" role="toolbar" aria-label="Điều khiển đọc">
+        <div className="rd-bar rd-top" role="toolbar" aria-label="Điều khiển đọc" onFocus={showBars}>
           {onOpenRail && (
             <button type="button" className="icon-btn rd-mobile-only" onClick={onOpenRail} aria-label="Danh sách truyện" title="Danh sách truyện">
               {rdHasIcon("menu") ? <Icon name="menu" size={18} /> : <span aria-hidden="true">☰</span>}
@@ -650,7 +742,7 @@ function OutputScreen({
         </div>
 
         {/* Thanh dưới (mobile) */}
-        <nav className="rd-bar rd-bottom rd-mobile-only" aria-label="Điều hướng chương">
+        <nav className="rd-bar rd-bottom rd-mobile-only" aria-label="Điều hướng chương" onFocus={showBars}>
           <button type="button" className="rd-nav-btn" onClick={() => go(prevCh)} {...navDisabled(prevCh)}>
             <Icon name="prev" size={18} /> Trước
           </button>

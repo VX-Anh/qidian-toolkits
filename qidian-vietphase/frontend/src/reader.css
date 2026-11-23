@@ -460,6 +460,9 @@
   }
   .rd[data-bars="hidden"] .rd-top { transform: translateY(-100%); }
   .rd[data-bars="hidden"] .rd-bottom { transform: translateY(100%); }
+  /* Tab vào nút trên thanh đang ẩn → thanh hiện ngay để thấy viền focus
+     (JS cũng bỏ trạng thái ẩn qua onFocus). */
+  .rd[data-bars="hidden"] .rd-bar:focus-within { transform: none; }
   .rd-nav-btn {
     all: unset;
     box-sizing: border-box;

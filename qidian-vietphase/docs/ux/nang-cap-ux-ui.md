@@ -348,6 +348,18 @@ suspendKeys, fontMode, onFontMode(v)
 
 Ngoài ra (mức nhẹ, đã sửa luôn): ô tìm chương ở 360px chỉ rộng ~40px → chiếm cả hàng; cmdk hiện «Không có kết quả» bằng `StatusBlock`, có `role="dialog"`, `aria-activedescendant`, Enter chạy đúng mục đang focus; nhãn cmdk «Đi đến Bản dịch» → «Đi đến Đọc»; bỏ dòng giả «+12 thuật ngữ từ batch trước» ở Thuật ngữ; thêm `aria-label` cho nút chỉ có icon (trước/sau, zoom ảnh, sửa/xoá thuật ngữ) và ô nhập không có nhãn; bản prod hết 404 `/favicon.ico` trong console (favicon SVG nội tuyến).
 
+### 8.2b Lỗi review phát hiện sau W6 (đã sửa ở đầu việc FIX)
+
+| Màn | Heuristic | Lỗi | Cách sửa |
+|---|---|---|---|
+| Đọc | H9 | JSON hợp lệ nhưng sai kiểu trong `localStorage` (vd `{"valueOf":null,"toString":null}`) làm `Number()` ném `TypeError` → màn đọc vỡ (TC11) | `rdNum` chỉ nhận `typeof number`; tuỳ chọn hỏng → mặc định, số chương hỏng → bỏ tiến độ, trường vị trí hỏng → 0 |
+| Đọc | H1, H5 | Đổi chương / thử lại: render đầu ghép tiêu đề chương mới với nội dung/lỗi cũ, nút Sao chép/.txt xuất nội dung cũ; file bản dịch rỗng (`200`, `content: ""`) hiện «Đang tải» mãi (TC22/TC23) | Kết quả tải gắn khoá `filename + lần thử`, trạng thái suy ra ngay trong render (`rdViewState`); thêm trạng thái «Chương N chưa có nội dung» có «Tải lại» |
+| Đọc | H6 | Khôi phục giữa đoạn dài nhiều màn hình quay về đầu đoạn; rời màn / đổi truyện / tải lại trong 400ms sau lần cuộn cuối thì mất lần lưu (TC12/TC13) | Lưu thêm `pin` (tỉ lệ đã cuộn trong đoạn); chốt lần lưu đang chờ khi chuyển chương (trước khi ghi chương mới), khi rời màn (dọn dẹp `useLayoutEffect`, DOM còn), `pagehide` và tab bị ẩn |
+| Đọc (mobile) | H3, truy cập | Thanh trên/dưới đã ẩn khi cuộn vẫn nhận focus bằng Tab → viền focus nằm ngoài màn (TC27) | `.rd-bar:focus-within` hiện thanh ngay; `onFocus` bỏ trạng thái ẩn |
+| Thuật ngữ | H1, H9 | Đang tải / lỗi tải hiện như «Chưa có thuật ngữ trong nhóm này», không có «Thử lại» | `glossaryStatus` trong `app.jsx` (reset khi đổi truyện, lỗi nạp lại nền giữ dữ liệu đúng truyện); màn dùng `StatusBlock` loading/error + «Thử lại» |
+
+Test hàm thuần của màn đọc: `node --test qidian-vietphase/frontend/tools/reader-storage.test.mjs` (localStorage hỏng nhiều kiểu, khôi phục vị trí, trạng thái tải khi đổi chương từ chương đã tải / chương lỗi / thử lại / file rỗng). Phần React (chốt lưu khi rời màn, focus thanh ẩn, màn Thuật ngữ) chưa kiểm headless ở đầu việc FIX: máy làm việc không có `uv` và Playwright.
+
 ### 8.3 Mức trung bình / nhẹ chưa sửa → ticket sau
 
 | Màn | Mức | Vấn đề | Lý do chưa sửa |
