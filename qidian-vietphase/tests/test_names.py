@@ -372,6 +372,9 @@ class RenameTest(unittest.TestCase):
             n.rename_undo("t", n.UndoRequest(backup_id="../../etc"))
 
 
+A1, A2 = "tự động · chương 1", "tự động · chương 2"
+
+
 class PruneUnusedTest(unittest.TestCase):
     """Tên dò tự động mà bản dịch không dùng → gỡ khỏi bảng; tên đang dùng / chương chưa
     dịch xong / dòng người dùng đã sửa → giữ."""
@@ -416,8 +419,8 @@ class PruneUnusedTest(unittest.TestCase):
 
     def test_unused_removed_used_kept(self):
         f1 = self._chapter(1, "赵寒山看向殷凤池。萧城主。", "Ân phượng trì nhìn sang.")
-        left = self._run([f1], [("赵寒山", "Triệu Hàn Sơn"), ("殷凤池", "Ân Phượng Trì"),
-                                ("萧城主", "Tiêu Thành Chủ")])
+        left = self._run([f1], [("赵寒山", "Triệu Hàn Sơn", A1), ("殷凤池", "Ân Phượng Trì", A1),
+                                ("萧城主", "Tiêu Thành Chủ", "người dùng sửa")])
         self.assertNotIn("赵寒山", left)
         self.assertIn("殷凤池", left)      # dùng (khác hoa thường vẫn tính)
         self.assertIn("萧城主", left)      # dòng không phải tự động → không đụng
@@ -426,12 +429,33 @@ class PruneUnusedTest(unittest.TestCase):
     def test_kept_when_a_containing_chapter_not_done(self):
         f1 = self._chapter(1, "龛瑶。", "Không có.")
         f2 = self._chapter(2, "龛瑶。", None, status=ChapterStatus.FAILED)
-        self.assertIn("龛瑶", self._run([f1, f2], [("龛瑶", "Khám Dao")]))
+        self.assertIn("龛瑶", self._run([f1, f2], [("龛瑶", "Khám Dao", A2)]))
 
     def test_used_in_another_chapter_kept(self):
         f1 = self._chapter(1, "龛瑶。", "Không có.")
         f2 = self._chapter(2, "龛瑶亮。", "Khám Dao sáng lên.")
-        self.assertIn("龛瑶", self._run([f1, f2], [("龛瑶", "Khám Dao")]))
+        self.assertIn("龛瑶", self._run([f1, f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_done_chapter_outside_batch_protects(self):
+        self._chapter(1, "龛瑶亮。", "Khám Dao sáng lên.")      # không nằm trong lô
+        f2 = self._chapter(2, "龛瑶。", "Không có.")
+        self.assertIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_unaccented_variant_counts_as_used(self):
+        f2 = self._chapter(2, "龛瑶。", "Kham Dao sang len.")
+        self.assertIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_edited_note_protects_row(self):
+        p = self.rules / "t" / "novel.md"
+        p.write_text(p.read_text(encoding="utf-8").replace(
+            "| 龛瑶 | Khám Dao | tự động · chương 2 |", "| 龛瑶 | Khám Dao | tự động · chương 2 · đúng rồi |"),
+            encoding="utf-8")
+        f2 = self._chapter(2, "龛瑶。", "Không có.")
+        self.assertIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_unused_removed_alone(self):
+        f2 = self._chapter(2, "龛瑶。", "Không có.")
+        self.assertNotIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
 
 
 if __name__ == "__main__":
