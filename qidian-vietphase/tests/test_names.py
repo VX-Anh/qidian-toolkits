@@ -315,6 +315,23 @@ class RenameTest(unittest.TestCase):
         n._prune_backups("t", keep=2)
         self.assertEqual(sorted(d.name for d in root.iterdir()),
                          ["20260101-000003-abcdef", "20260101-000004-abcdef", "khac"])
+        # Bản vừa tạo luôn được giữ dù xếp theo tên đứng đầu.
+        (root / "20250101-000000-000000").mkdir()
+        n._prune_backups("t", current="20250101-000000-000000", keep=2)
+        self.assertEqual(sorted(d.name for d in root.iterdir()),
+                         ["20250101-000000-000000", "20260101-000004-abcdef", "khac"])
+
+    def test_check_all_error_rolls_back_fixes(self):
+        n = self.names
+        inp = n.settings.input_dir
+        inp.mkdir()
+        (inp / "第2章 x.txt").write_text("裴天罡出手。", encoding="utf-8")
+        (inp / "第3章 x.txt").write_bytes(bytes([0xFF, 0xFE]) + b" bad")   # bản gốc hỏng mã hoá
+        self.files[1].write_text("Bùi Thiên Cang ra tay.", encoding="utf-8")
+        with self.assertRaises(UnicodeDecodeError):
+            asyncio.run(n.check_all("t"))
+        self.assertEqual(self.files[1].read_text(encoding="utf-8"), "Bùi Thiên Cang ra tay.")
+        self.assertFalse(n._backup_root("t").exists())
 
     def test_longer_names_protected_and_readings_updated(self):
         n = self.names

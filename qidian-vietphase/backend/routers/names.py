@@ -154,14 +154,17 @@ def _new_backup_id() -> str:
     return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
 
 
-def _prune_backups(slug: str, keep: int = _KEEP_BACKUPS) -> None:
+def _prune_backups(slug: str, current: str | None = None, keep: int = _KEEP_BACKUPS) -> None:
     """Xoá bản sao lưu cũ, giữ `keep` bản mới nhất (tên bắt đầu bằng thời điểm → sắp xếp
-    theo tên là theo thời gian). Lỗi xoá không làm hỏng thao tác chính."""
+    theo tên là theo thời gian) và LUÔN giữ bản `current` vừa tạo (nhiều bản trong cùng
+    một giây thì hậu tố ngẫu nhiên không theo thứ tự). Lỗi xoá không làm hỏng thao tác chính."""
     root = _backup_root(slug)
     if not root.is_dir():
         return
-    dirs = sorted(d for d in root.iterdir() if d.is_dir() and _BACKUP_ID.match(d.name))
-    for d in dirs[:-keep] if keep > 0 else dirs:
+    dirs = sorted(d for d in root.iterdir()
+                  if d.is_dir() and _BACKUP_ID.match(d.name) and d.name != current)
+    keep_old = max(keep - (1 if current else 0), 0)
+    for d in dirs[:len(dirs) - keep_old]:
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -187,16 +190,30 @@ async def check_all(slug: str):
     backup_id = None
     with novel_busy(slug, "kiểm tên riêng"), novel_files_lock(slug):
         changed: list[tuple[Path, bytes]] = []   # (file, nội dung TRƯỚC khi tự sửa)
-        for c in _done_chapters(slug):
-            before = c["_path"].read_bytes()
-            res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
-            if res is None:
-                continue
-            checked += 1
-            fixed += res.fixed_count
-            issues += len(res.issues)
-            if c["_path"].read_bytes() != before:
-                changed.append((c["_path"], before))
+        current: tuple[Path, bytes] | None = None
+        try:
+            for c in _done_chapters(slug):
+                current = (c["_path"], c["_path"].read_bytes())
+                res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
+                if res is not None:
+                    checked += 1
+                    fixed += res.fixed_count
+                    issues += len(res.issues)
+                if current[0].read_bytes() != current[1]:
+                    changed.append(current)
+                current = None
+        except BaseException:
+            # Lỗi giữa chừng (vd bản gốc hỏng mã hoá): trả mọi file đã tự sửa về như cũ —
+            # không để lại thay đổi mà không có sao lưu để hoàn tác.
+            for path, before in changed + ([current] if current else []):
+                try:
+                    if path.read_bytes() != before:
+                        tmp = path.with_name(path.name + ".tmp")
+                        tmp.write_bytes(before)
+                        tmp.replace(path)
+                except OSError:
+                    pass
+            raise
         if changed:
             # Sao lưu cùng định dạng với đổi tên → hoàn tác bằng /rename/undo.
             backup_id = _new_backup_id()
@@ -209,7 +226,7 @@ async def check_all(slug: str):
                 manifest["files"].append({"path": str(path), "backup": name,
                                           "after": _sha(path.read_bytes())})
             (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-            _prune_backups(slug)
+            _prune_backups(slug, backup_id)
     return {"checked": checked, "fixed": fixed, "issues": issues, "backup_id": backup_id}
 
 
@@ -283,7 +300,7 @@ def rename_apply(slug: str, req: RenameRequest):
                 f["after"] = _sha(path.read_bytes())
             manifest["novel_md_after"] = _sha(md.read_bytes()) if md.is_file() else None
             (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
-        _prune_backups(slug)
+        _prune_backups(slug, backup_id)
     return {"backup_id": backup_id, "files": len(changed), "replaced": replaced,
             "glossary_rows": rows, "protected": protected}
 

@@ -323,7 +323,15 @@ class Orchestrator:
         bản dịch bất kỳ có tên đó, so kiểu bỏ dấu (fold) để biến thể chưa kịp sửa (Tu Ky)
         vẫn tính là đang dùng."""
         try:
-            removed, recheck = await asyncio.to_thread(self._prune_unused_sync, files)
+            # Huỷ job giữa chừng: thread vẫn chạy tới khi xong (không dừng được) → chờ nó xong
+            # rồi mới nhả CancelledError, để job "đang chạy" không kết thúc trong lúc thread
+            # còn ghi novel.md (thao tác khác có thể bắt đầu ngay sau khi job kết thúc).
+            fut = asyncio.ensure_future(asyncio.to_thread(self._prune_unused_sync, files))
+            try:
+                removed, recheck = await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                await asyncio.wait({fut})
+                raise
             if not removed:
                 return
             await self._emit("scout", "pruned", removed=[f"{zh} → {vi}" for zh, vi in removed])
