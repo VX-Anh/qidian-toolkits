@@ -20,7 +20,33 @@ uv sync
 #   uv run playwright install chromium   và thêm --channel chromium
 ```
 
-## Dùng
+## Đưa tên, tự lấy full
+
+```bash
+uv run novel-crawler find "凡人修仙传"                 # tên Trung
+uv run novel-crawler find "Phàm Nhân Tu Tiên"          # tên Việt → Claude CLI đoán tên Trung
+uv run novel-crawler find "人道大圣" --author 莫默 --yes  # lọc tác giả, không hỏi
+uv run novel-crawler find "凡人修仙传" --dry-run         # chỉ xem chọn nguồn nào, không tải
+```
+
+Tool làm lần lượt:
+1. **Tên Việt → tên Trung:** gọi `claude -p` (Claude Code CLI đã đăng nhập), lưu cache ở
+   `~/.novel-crawler/names.json`. Đoán sai thì dùng `--zh "<tên Trung>"`.
+2. **Tìm:** Bing (mở bằng Chrome) với 4 câu `<tên> 69书吧 / 笔趣阁 / 17k小说网 / 纵横中文网`,
+   DuckDuckGo dự phòng. Chỉ giữ kết quả đúng tên (không nhận 凡人修仙传：xxx, 凡人修仙之仙界篇).
+   Bỏ qua trang chính thống không có bản raw (qidian, qimao, shuqi...).
+3. **Kiểm ứng viên:** đọc mục lục tối đa 8 nguồn (trang kẹt màn kiểm tra > 20 giây thì bỏ qua),
+   đếm chương tải được, gom nhóm theo 5 chương đầu để loại sách trùng tên.
+4. **Chọn:** nhiều chương tải được nhất, hoà thì 69shu > Biquge > 17k/Zongheng; tải thử 1 chương
+   trước khi chốt. Các nguồn khác tác giả nhau thì hỏi chọn (trừ khi `--yes`).
+5. **Tải + vá:** tải từ nguồn chính, chương lỗi lấy bù từ nguồn phụ theo số chương.
+6. **Kết quả:** `chapters/*.txt`, file gộp `<tên>.txt`, và `report.txt` (nguồn, số chương, chương
+   thiếu, số chương bị nhảy, chương ngắn bất thường).
+
+Vì sao tìm qua Bing mà không dùng ô tìm kiếm của trang: 69shu bắt giải Cloudflare Turnstile mỗi lần
+tìm, trang kết quả 17k bị chống bot làm trống, mirror Biquge mỗi cái một kiểu.
+
+## Dùng theo link
 
 ```bash
 # Tải cả truyện (link trang sách, mục lục hay một chương đều được)

@@ -55,8 +55,12 @@ class Shu69(Site):
                 num = i
             rows.append((num, ChapterRef(_clean_title(a.get_text(strip=True)), absolute(url, a["href"]))))
         rows.sort(key=lambda r: r[0])   # có bản mục lục xếp mới nhất lên đầu
+        author = meta(doc, "og:novel:author")
+        if not author:   # mục lục 69shu để tác giả trong script: bookinfo = {... author:'忘语' ...}
+            m = re.search(r"author\s*:\s*['\"]([^'\"]{1,30})['\"]", html)
+            author = m.group(1).strip() if m else ""
         return Book(self.name, self.book_id(url), title, url,
-                    author=meta(doc, "og:novel:author"), chapters=dedupe([r[1] for r in rows]))
+                    author=author, chapters=dedupe([r[1] for r in rows]))
 
     def parse_chapter(self, html, url):
         doc = soup(html)

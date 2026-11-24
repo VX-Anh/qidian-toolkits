@@ -1,5 +1,6 @@
 """Dòng lệnh novel-crawler.
 
+  find "<tên truyện>"               tự tìm nguồn theo tên (Trung/Việt), tải full, gộp, báo cáo
   get <link sách/mục lục/chương>   tải truyện (chạy lại = tải tiếp phần còn thiếu)
   update [thư mục ...]              tải chương mới cho sách đã tải (mặc định: mọi sách trong --out)
   info <link>                       xem tên sách, số chương, số chương khoá
@@ -12,6 +13,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .fetch import DEFAULT_PROFILE, BrowserFetcher, FetchError, HttpFetcher
 from .sites import site_by_name, site_for
@@ -24,7 +26,13 @@ MAX_PAGES_PER_CHAPTER = 20
 
 
 class Fetcher:
-    """mode: auto (HTTP trước, bị chặn thì chuyển sang Chrome và giữ luôn), http, browser."""
+    """mode: auto (HTTP trước; tên miền nào chặn thì tên miền đó chuyển sang Chrome), http, browser.
+
+    quick=True: dùng khi chỉ kiểm tra ứng viên — thử 1 lần, chờ màn kiểm tra tối đa 20 giây,
+    trang nào kẹt thì bỏ qua thay vì chờ người dùng.
+    """
+
+    QUICK_CHALLENGE_WAIT = 20
 
     def __init__(self, args, prefer_browser: bool = False):
         self.args = args
@@ -33,6 +41,7 @@ class Fetcher:
             self.mode = "browser"
         self._http = None
         self._browser = None
+        self.browser_hosts: set[str] = set()
 
     def _get_browser(self):
         if self._browser is None:
@@ -41,19 +50,30 @@ class Fetcher:
                                            headless=self.args.headless, channel=self.args.channel)
         return self._browser
 
-    def get(self, url: str, referer: str | None = None) -> str:
-        if self.mode == "browser":
-            return self._get_browser().get(url, referer)
-        if self._http is None:
-            self._http = HttpFetcher(delay=self.args.delay)
+    def get(self, url: str, referer: str | None = None, quick: bool = False) -> str:
+        host = urlparse(url).hostname or ""
+        if self.mode == "browser" or host in self.browser_hosts:
+            return self.get_browser(url, referer, quick)
         try:
-            return self._http.get(url, referer)
+            return self.get_http(url, referer, quick)
         except FetchError as e:
             if self.mode == "auto" and "--browser" in str(e):
-                print("  HTTP thường bị chặn → chuyển sang Chrome.", flush=True)
-                self.mode = "browser"
-                return self._get_browser().get(url, referer)
+                print(f"  {host}: HTTP thường bị chặn → dùng Chrome cho tên miền này.", flush=True)
+                self.browser_hosts.add(host)
+                return self.get_browser(url, referer, quick)
             raise
+
+    def get_browser(self, url: str, referer: str | None = None, quick: bool = False) -> str:
+        """Dùng Chrome cho request này (vd trang tìm kiếm), không đổi mode chung."""
+        if self.mode == "http":
+            raise FetchError("đang ở --http nên không mở Chrome")
+        wait = self.QUICK_CHALLENGE_WAIT if quick else None
+        return self._get_browser().get(url, referer, challenge_wait=wait, tries=1 if quick else 3)
+
+    def get_http(self, url: str, referer: str | None = None, quick: bool = False) -> str:
+        if self._http is None:
+            self._http = HttpFetcher(delay=self.args.delay)
+        return self._http.get(url, referer, retries=1 if quick else None)
 
     def close(self):
         for f in (self._http, self._browser):
@@ -187,6 +207,17 @@ def cmd_info(args):
     return 0
 
 
+def cmd_find(args):
+    from .finder import run_find
+    if not (args.name or args.zh):
+        raise SystemExit("Cần tên truyện: novel-crawler find \"凡人修仙传\" (hoặc --zh)")
+    fetcher = Fetcher(args)
+    try:
+        return run_find(args, fetcher)
+    finally:
+        fetcher.close()
+
+
 def cmd_merge(args):
     print("Đã gộp:", BookStore(Path(args.dir)).merge(Path(args.output) if args.output else None))
     return 0
@@ -258,6 +289,16 @@ def build_parser():
     p.add_argument("--site", help="ép adapter: 17k, zongheng, 69shu, biquge")
     p.add_argument("--merge", action="store_true", help="tải xong gộp thành 1 file .txt")
     p.set_defaults(func=cmd_get)
+
+    p = sub.add_parser("find", parents=[common], help="đưa tên truyện → tự tìm nguồn, tải full, gộp")
+    p.add_argument("name", nargs="?", default="", help="tên Trung hoặc tên Việt")
+    p.add_argument("--zh", help="tên Trung (bỏ qua bước đoán tên từ tên Việt)")
+    p.add_argument("--author", help="tác giả, để lọc sách trùng tên")
+    p.add_argument("--yes", "-y", action="store_true", help="không hỏi, tự chọn nguồn điểm cao nhất")
+    p.add_argument("--dry-run", action="store_true", help="chỉ tìm và chọn nguồn, không tải")
+    p.add_argument("--from", dest="start", type=int, help="từ chương số")
+    p.add_argument("--to", dest="end", type=int, help="đến chương số (không vá chỗ thiếu khi giới hạn)")
+    p.set_defaults(func=cmd_find)
 
     p = sub.add_parser("update", parents=[common], help="tải chương mới cho sách đã tải")
     p.add_argument("dirs", nargs="*")
