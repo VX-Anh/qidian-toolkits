@@ -82,9 +82,10 @@ class HttpFetcher:
             follow_redirects=True, timeout=timeout,
         )
 
-    def get(self, url: str, referer: str | None = None) -> str:
+    def get(self, url: str, referer: str | None = None, retries: int | None = None) -> str:
         err = None
-        for attempt in range(1, self.retries + 1):
+        retries = retries or self.retries
+        for attempt in range(1, retries + 1):
             self.throttle.wait()
             try:
                 r = self.client.get(url, headers={"Referer": referer} if referer else None)
@@ -100,8 +101,9 @@ class HttpFetcher:
                     raise FetchError(f"HTTP {r.status_code} khi tải {url}")
                 else:
                     return html
-            time.sleep(2 * attempt)
-        raise FetchError(f"Tải thất bại sau {self.retries} lần: {url} ({err})")
+            if attempt < retries:
+                time.sleep(2 * attempt)
+        raise FetchError(f"Tải thất bại sau {retries} lần: {url} ({err})")
 
     def close(self):
         self.client.close()
@@ -131,22 +133,26 @@ class BrowserFetcher:
                 "`uv run playwright install chromium` rồi thêm --channel chromium") from None
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
 
-    def get(self, url: str, referer: str | None = None) -> str:
+    def get(self, url: str, referer: str | None = None, challenge_wait: float | None = None,
+            tries: int = 3) -> str:
         self.throttle.wait()
         last = None
-        for attempt in range(1, 4):
+        for attempt in range(1, tries + 1):
             try:
-                self.page.goto(url, wait_until="domcontentloaded", timeout=45_000, referer=referer)
+                self.page.goto(url, wait_until="domcontentloaded",
+                               timeout=45_000 if tries > 1 else 20_000, referer=referer)
                 break
             except Exception as e:  # timeout / lỗi mạng
-                last = e
-                time.sleep(2 * attempt)
+                last = str(e).splitlines()[0]
+                if attempt < tries:
+                    time.sleep(2 * attempt)
         else:
             raise FetchError(f"Chrome không mở được {url}: {last}")
-        return self._wait_real_content(url)
+        return self._wait_real_content(url, challenge_wait)
 
-    def _wait_real_content(self, url: str) -> str:
-        deadline = time.monotonic() + self.challenge_wait
+    def _wait_real_content(self, url: str, challenge_wait: float | None = None) -> str:
+        challenge_wait = challenge_wait or self.challenge_wait
+        deadline = time.monotonic() + challenge_wait
         warned = False
         while True:
             try:
@@ -163,8 +169,8 @@ class BrowserFetcher:
                 if not looks_blocked(html):
                     return html
             if time.monotonic() > deadline:
-                raise FetchError(f"Hết {self.challenge_wait:.0f}s mà vẫn kẹt ở màn kiểm tra: {url}")
-            if not warned and html:
+                raise FetchError(f"Hết {challenge_wait:.0f}s mà vẫn kẹt ở màn kiểm tra: {url}")
+            if not warned and html and challenge_wait > 30:
                 print("  ⚠ Trang đang hiện màn kiểm tra — nếu cần, hãy bấm xác minh trong cửa sổ Chrome. "
                       "Tool sẽ tự chạy tiếp khi qua.", flush=True)
                 warned = True
