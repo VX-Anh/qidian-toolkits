@@ -1,7 +1,7 @@
 """Tên riêng: báo cáo kiểm tên, kiểm lại cả truyện, đổi tên hàng loạt (có hoàn tác).
 
 - GET  /api/names/{slug}/report        chữ đa âm chưa chốt + kết quả kiểm tên từng chương
-- POST /api/names/{slug}/check         kiểm + tự sửa tên cho mọi chương đã dịch
+- POST /api/names/{slug}/check         kiểm + tự sửa tên cho mọi chương đã dịch (có sao lưu)
 - POST /api/names/{slug}/rename/preview  {old_vi, new_vi} → số chỗ sẽ thay theo chương
 - POST /api/names/{slug}/rename/apply    → sao lưu, thay trong bản dịch + bảng thuật ngữ
 - POST /api/names/{slug}/rename/undo     {backup_id} → khôi phục bản sao lưu
@@ -33,6 +33,7 @@ router = APIRouter(prefix="/api/names", tags=["names"], dependencies=[Depends(ch
 
 _BACKUP_ID = re.compile(r"^[0-9]{8}-[0-9]{6}-[0-9a-f]{6}$")
 _SNIPPET = 40
+_KEEP_BACKUPS = 30   # mỗi truyện giữ N bản sao lưu mới nhất
 
 
 class RenameRequest(BaseModel):
@@ -149,6 +150,24 @@ def _backup_root(slug: str) -> Path:
     return settings.output_dir / ".name-backups" / slug
 
 
+def _new_backup_id() -> str:
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+def _prune_backups(slug: str, current: str | None = None, keep: int = _KEEP_BACKUPS) -> None:
+    """Xoá bản sao lưu cũ, giữ `keep` bản mới nhất (tên bắt đầu bằng thời điểm → sắp xếp
+    theo tên là theo thời gian) và LUÔN giữ bản `current` vừa tạo (nhiều bản trong cùng
+    một giây thì hậu tố ngẫu nhiên không theo thứ tự). Lỗi xoá không làm hỏng thao tác chính."""
+    root = _backup_root(slug)
+    if not root.is_dir():
+        return
+    dirs = sorted(d for d in root.iterdir()
+                  if d.is_dir() and _BACKUP_ID.match(d.name) and d.name != current)
+    keep_old = max(keep - (1 if current else 0), 0)
+    for d in dirs[:len(dirs) - keep_old]:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 @router.get("/{slug}/report")
 def report(slug: str):
     check_slug(slug)
@@ -168,15 +187,47 @@ async def check_all(slug: str):
     check_slug(slug)
     profile = _profile(slug)
     fixed = issues = checked = 0
+    backup_id = None
     with novel_busy(slug, "kiểm tên riêng"), novel_files_lock(slug):
-        for c in _done_chapters(slug):
-            res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
-            if res is None:
-                continue
-            checked += 1
-            fixed += res.fixed_count
-            issues += len(res.issues)
-    return {"checked": checked, "fixed": fixed, "issues": issues}
+        changed: list[tuple[Path, bytes]] = []   # (file, nội dung TRƯỚC khi tự sửa)
+        current: tuple[Path, bytes] | None = None
+        try:
+            for c in _done_chapters(slug):
+                current = (c["_path"], c["_path"].read_bytes())
+                res = await check_chapter_file(get_state(), c, settings.input_dir / c["filename"], profile)
+                if res is not None:
+                    checked += 1
+                    fixed += res.fixed_count
+                    issues += len(res.issues)
+                if current[0].read_bytes() != current[1]:
+                    changed.append(current)
+                current = None
+        except BaseException:
+            # Lỗi giữa chừng (vd bản gốc hỏng mã hoá): trả mọi file đã tự sửa về như cũ —
+            # không để lại thay đổi mà không có sao lưu để hoàn tác.
+            for path, before in changed + ([current] if current else []):
+                try:
+                    if path.read_bytes() != before:
+                        tmp = path.with_name(path.name + ".tmp")
+                        tmp.write_bytes(before)
+                        tmp.replace(path)
+                except OSError:
+                    pass
+            raise
+        if changed:
+            # Sao lưu cùng định dạng với đổi tên → hoàn tác bằng /rename/undo.
+            backup_id = _new_backup_id()
+            bdir = _backup_root(slug) / backup_id
+            bdir.mkdir(parents=True, exist_ok=True)
+            manifest: dict = {"kind": "check", "files": [], "novel_md": False}
+            for i, (path, before) in enumerate(changed):
+                name = f"{i:04d}.txt"
+                (bdir / name).write_bytes(before)
+                manifest["files"].append({"path": str(path), "backup": name,
+                                          "after": _sha(path.read_bytes())})
+            (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            _prune_backups(slug, backup_id)
+    return {"checked": checked, "fixed": fixed, "issues": issues, "backup_id": backup_id}
 
 
 @router.post("/{slug}/rename/preview")
@@ -207,7 +258,7 @@ def rename_apply(slug: str, req: RenameRequest):
     old, new = _check_names(req.old_vi, req.new_vi)
     with novel_busy(slug, "đổi tên riêng"), novel_files_lock(slug):
         protected = _longer_names(slug, old)
-        backup_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        backup_id = _new_backup_id()
         bdir = _backup_root(slug) / backup_id
         manifest: dict = {"old_vi": old, "new_vi": new, "files": [], "novel_md": False}
         replaced = 0
@@ -249,6 +300,7 @@ def rename_apply(slug: str, req: RenameRequest):
                 f["after"] = _sha(path.read_bytes())
             manifest["novel_md_after"] = _sha(md.read_bytes()) if md.is_file() else None
             (bdir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+        _prune_backups(slug, backup_id)
     return {"backup_id": backup_id, "files": len(changed), "replaced": replaced,
             "glossary_rows": rows, "protected": protected}
 

@@ -323,47 +323,61 @@ class Orchestrator:
         bản dịch bất kỳ có tên đó, so kiểu bỏ dấu (fold) để biến thể chưa kịp sửa (Tu Ky)
         vẫn tính là đang dùng."""
         try:
-            batch = {p.name for p in files}
-            paths = list(files)
-            for ch in self.state.get_chapters(self.novel_slug):
-                if ch["filename"] not in batch and ch["status"] == ChapterStatus.DONE:
-                    p = self.input_dir / ch["filename"]
-                    if p.is_file():
-                        paths.append(p)
-            sources: list[tuple[Path, str, dict | None, str | None, bool]] = []
-            for path in paths:
-                ch = self.state.get_chapter(path.name)
-                text = None
-                if ch and ch["status"] == ChapterStatus.DONE and ch.get("translated_path"):
-                    try:
-                        text = fold(Path(ch["translated_path"]).read_text(encoding="utf-8"))
-                    except OSError:
-                        text = None
-                sources.append((path, path.read_text(encoding="utf-8"), ch, text,
-                                path.name in batch))
-            unused = []
-            for zh, vi, notes in self._auto_names:
-                hits = [s for s in sources if zh in s[1]]
-                if not any(s[4] for s in hits):
-                    continue
-                if any(s[4] and s[3] is None for s in hits):
-                    continue   # chương trong lô chưa dịch xong
-                if any(s[3] is not None and fold(vi) in s[3] for s in hits):
-                    continue   # có bản dịch dùng tên này
-                unused.append((zh, vi, notes))
-            removed = remove_auto_terms(self.rules_dir, self.novel_slug, unused)
+            # Huỷ job giữa chừng: thread vẫn chạy tới khi xong (không dừng được) → chờ nó xong
+            # rồi mới nhả CancelledError, để job "đang chạy" không kết thúc trong lúc thread
+            # còn ghi novel.md (thao tác khác có thể bắt đầu ngay sau khi job kết thúc).
+            fut = asyncio.ensure_future(asyncio.to_thread(self._prune_unused_sync, files))
+            try:
+                removed, recheck = await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                await asyncio.wait({fut})
+                raise
             if not removed:
                 return
             await self._emit("scout", "pruned", removed=[f"{zh} → {vi}" for zh, vi in removed])
             print(f"[dịch]   − gỡ {len(removed)} tên tự động không dùng: "
                   + ", ".join(f"{zh}→{vi}" for zh, vi in removed), flush=True)
             # Kiểm tên lại các chương liên quan để bỏ báo "thiếu tên" của dòng vừa gỡ.
-            gone = {zh for zh, _ in removed}
-            for path, raw, ch, _, _ in sources:
-                if ch and ch["status"] == ChapterStatus.DONE and any(z in raw for z in gone):
-                    await self._check_names(ch, path)
+            for ch, path in recheck:
+                await self._check_names(ch, path)
         except Exception as exc:
             await self._emit("scout", "error", error=f"gỡ tên không dùng: {str(exc)[:300]}")
+
+    def _prune_unused_sync(self, files: list[Path]) -> tuple[list[tuple[str, str]], list]:
+        """Phần đọc file + ghi novel.md của _prune_unused, chạy trong thread để không chặn
+        event loop khi truyện dài. Trả (các (zh, vi) đã gỡ, [(chương DONE cần kiểm lại, bản gốc)])."""
+        batch = {p.name for p in files}
+        paths = list(files)
+        for ch in self.state.get_chapters(self.novel_slug):
+            if ch["filename"] not in batch and ch["status"] == ChapterStatus.DONE:
+                p = self.input_dir / ch["filename"]
+                if p.is_file():
+                    paths.append(p)
+        sources: list[tuple[Path, str, dict | None, str | None, bool]] = []
+        for path in paths:
+            ch = self.state.get_chapter(path.name)
+            text = None
+            if ch and ch["status"] == ChapterStatus.DONE and ch.get("translated_path"):
+                try:
+                    text = fold(Path(ch["translated_path"]).read_text(encoding="utf-8"))
+                except OSError:
+                    text = None
+            sources.append((path, path.read_text(encoding="utf-8"), ch, text, path.name in batch))
+        unused = []
+        for zh, vi, notes in self._auto_names:
+            hits = [s for s in sources if zh in s[1]]
+            if not any(s[4] for s in hits):
+                continue
+            if any(s[4] and s[3] is None for s in hits):
+                continue   # chương trong lô chưa dịch xong
+            if any(s[3] is not None and fold(vi) in s[3] for s in hits):
+                continue   # có bản dịch dùng tên này
+            unused.append((zh, vi, notes))
+        removed = remove_auto_terms(self.rules_dir, self.novel_slug, unused)
+        gone = {zh for zh, _ in removed}
+        recheck = [(ch, path) for path, raw, ch, _, _ in sources
+                   if gone and ch and ch["status"] == ChapterStatus.DONE and any(z in raw for z in gone)]
+        return removed, recheck
 
     async def _check_names(self, chapter: dict, path: Path) -> None:
         """Kiểm + tự sửa tên trong bản dịch vừa lưu (bảng mới nhất). Lỗi không làm hỏng chương."""
