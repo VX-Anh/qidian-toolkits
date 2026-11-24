@@ -6,7 +6,8 @@ import anthropic
 
 from ..config import settings
 from .extractor import ExtractorAgent
-from .novel_loader import NovelProfile, load_novel
+from .hanviet import soft
+from .novel_loader import NovelProfile, load_novel, remove_auto_terms
 from .preprocessor import replace_proper_nouns
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
@@ -49,6 +50,7 @@ class Orchestrator:
         self.chapter_filenames = chapter_filenames  # None = dịch tất cả
         self.force = force  # True = dịch lại kể cả chương đã DONE
         self.run_wiki = run_wiki  # False = chỉ dịch, bỏ bước đưa vào Story-Wiki
+        self._auto_names: list[tuple[str, str]] = []  # (zh, vi) bước dò tên vừa thêm
 
     async def run(self):
         try:
@@ -89,6 +91,11 @@ class Orchestrator:
             sem = asyncio.Semaphore(settings.concurrency)
             tasks = [self._translate_one(path, profile, sem) for path in files]
             await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Tên dò tự động mà bản dịch không dùng tới → gỡ khỏi bảng (thường là chữ nhiễu
+            # trong bản gốc, model đã dịch theo ngữ cảnh thành tên khác).
+            if self._auto_names:
+                await self._prune_unused(files)
 
             # Chạy extractor sau khi tất cả đã dịch
             await self._emit("orchestrator", "extracting")
@@ -297,6 +304,7 @@ class Orchestrator:
                 await self._emit("scout", "done", file=path.name,
                                  added=[f"{n.zh} → {n.vi}" for n in added])
                 if added:
+                    self._auto_names += [(n.zh, n.vi) for n in added]
                     print(f"[dịch]   + {len(added)} tên mới: {path.name}", flush=True)
                     profile = load_novel(self.rules_dir, self.novel_slug)
             except asyncio.CancelledError:
@@ -306,6 +314,39 @@ class Orchestrator:
                 await self._emit("scout", "error", file=path.name, error=str(exc)[:300])
                 print(f"[dịch]   ! dò tên lỗi: {path.name} — {exc}", flush=True)
         return profile
+
+    async def _prune_unused(self, files: list[Path]) -> None:
+        """Gỡ tên tự thêm mà KHÔNG chương nào chứa nó dùng tới trong bản dịch. Giữ lại nếu
+        có chương chứa tên chưa dịch xong (thất bại / huỷ) — chưa đủ bằng chứng."""
+        try:
+            sources: list[tuple[Path, str, dict | None, str | None]] = []
+            for path in files:
+                ch = self.state.get_chapter(path.name)
+                text = None
+                if ch and ch["status"] == ChapterStatus.DONE and ch.get("translated_path"):
+                    try:
+                        text = soft(Path(ch["translated_path"]).read_text(encoding="utf-8"))
+                    except OSError:
+                        text = None
+                sources.append((path, path.read_text(encoding="utf-8"), ch, text))
+            unused = []
+            for zh, vi in self._auto_names:
+                hits = [s for s in sources if zh in s[1]]
+                if hits and all(s[3] is not None and soft(vi) not in s[3] for s in hits):
+                    unused.append((zh, vi))
+            removed = remove_auto_terms(self.rules_dir, self.novel_slug, unused)
+            if not removed:
+                return
+            await self._emit("scout", "pruned", removed=[f"{zh} → {vi}" for zh, vi in removed])
+            print(f"[dịch]   − gỡ {len(removed)} tên tự động không dùng: "
+                  + ", ".join(f"{zh}→{vi}" for zh, vi in removed), flush=True)
+            # Kiểm tên lại các chương liên quan để bỏ báo "thiếu tên" của dòng vừa gỡ.
+            gone = {zh for zh, _ in removed}
+            for path, raw, ch, _ in sources:
+                if ch and ch["status"] == ChapterStatus.DONE and any(z in raw for z in gone):
+                    await self._check_names(ch, path)
+        except Exception as exc:
+            await self._emit("scout", "error", error=f"gỡ tên không dùng: {str(exc)[:300]}")
 
     async def _check_names(self, chapter: dict, path: Path) -> None:
         """Kiểm + tự sửa tên trong bản dịch vừa lưu (bảng mới nhất). Lỗi không làm hỏng chương."""

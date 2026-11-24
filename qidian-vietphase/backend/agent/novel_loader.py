@@ -231,6 +231,41 @@ def append_readings_to_novel(rules_dir: Path, slug: str, readings: dict[str, str
         write_novel_md(path, content)
 
 
+AUTO_NOTE = "tự động · chương"
+_GLOSSARY_SECTIONS = ("Nhân vật", "Địa danh", "Cảnh giới tu luyện", "Kỹ năng / Pháp thuật")
+
+
+def remove_auto_terms(rules_dir: Path, slug: str, rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Gỡ các dòng thuật ngữ do bước dò tên tự thêm (ghi chú bắt đầu "tự động · chương"),
+    khớp đúng cả chữ Hán lẫn tên Việt. Dòng người dùng đã sửa (đổi tên Việt hoặc ghi chú)
+    không bị đụng. Trả các (zh, vi) đã gỡ."""
+    want = {(zh, vi) for zh, vi in rows}
+    if not want:
+        return []
+    with NOVEL_MD_LOCK:
+        path = rules_dir / slug / "novel.md"
+        if not path.exists():
+            return []
+        content = path.read_text(encoding="utf-8")
+        removed: list[tuple[str, str]] = []
+        out: list[str] = []
+        section = ""
+        for line in content.splitlines(keepends=True):
+            m = re.match(r"^## (.+)$", line.rstrip("\r\n"))
+            if m:
+                section = m.group(1).strip()
+            elif section in _GLOSSARY_SECTIONS and line.lstrip().startswith("|"):
+                cols = [c.strip() for c in line.strip().strip("|").split("|")]
+                if (len(cols) >= 3 and (cols[0], cols[1]) in want
+                        and cols[2].startswith(AUTO_NOTE)):
+                    removed.append((cols[0], cols[1]))
+                    continue
+            out.append(line)
+        if removed:
+            write_novel_md(path, "".join(out))
+        return removed
+
+
 def _default_prompt() -> str:
     return (
         "Bạn là dịch giả tiểu thuyết tiên hiệp/võ hiệp Trung-Việt chuyên nghiệp. "
