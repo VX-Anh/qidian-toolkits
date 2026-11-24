@@ -143,17 +143,24 @@ function Modal({ open, title, subtitle, children, footer, onClose, width = 460 }
 }
 
 // ── Toast
-function Toast({ message, type = "info", onDone }) {
+// action (tuỳ chọn): { label, onClick } — nút trong toast (vd "Hoàn tác"); toast có nút
+// hiện lâu hơn để kịp bấm.
+function Toast({ message, type = "info", onDone, action }) {
   useEffect(() => {
     if (!message) return;
-    const t = setTimeout(() => onDone(), 2400);
+    const t = setTimeout(() => onDone(), action ? 10000 : 2400);
     return () => clearTimeout(t);
-  }, [message, onDone]);
+  }, [message, onDone, action]);
   if (!message) return null;
   return (
-    <div className={`toast ${type}`}>
+    <div className={`toast ${type}`} role="status">
       <span className="toast-ico">{type === "success" ? "✓" : type === "error" ? "✗" : "·"}</span>
       <span>{message}</span>
+      {action && (
+        <button className="toast-action" onClick={() => { onDone(); action.onClick(); }}>
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

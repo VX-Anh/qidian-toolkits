@@ -290,6 +290,32 @@ class RenameTest(unittest.TestCase):
         self.assertEqual(self.files[0].read_text(encoding="utf-8"), "Tư Kỳ nói. Tư Kỳ cười.")
         self.assertIn("| 司奇 | Tư Kỳ |", (self.rules / "t" / "novel.md").read_text(encoding="utf-8"))
 
+    def test_check_all_backs_up_fixes_and_undo_restores(self):
+        n = self.names
+        inp = n.settings.input_dir
+        inp.mkdir()
+        (inp / "第2章 x.txt").write_text("裴天罡出手。", encoding="utf-8")
+        self.files[1].write_text("Bùi Thiên Cang ra tay.", encoding="utf-8")
+        r = asyncio.run(n.check_all("t"))
+        self.assertEqual(r["fixed"], 1)
+        self.assertTrue(r["backup_id"])
+        self.assertEqual(self.files[1].read_text(encoding="utf-8"), "Bùi Thiên Cương ra tay.")
+        n.rename_undo("t", n.UndoRequest(backup_id=r["backup_id"]))
+        self.assertEqual(self.files[1].read_text(encoding="utf-8"), "Bùi Thiên Cang ra tay.")
+        # Không sửa gì → không tạo sao lưu.
+        self.files[1].write_text("Bùi Thiên Cương ra tay.", encoding="utf-8")
+        self.assertIsNone(asyncio.run(n.check_all("t"))["backup_id"])
+
+    def test_old_backups_pruned(self):
+        n = self.names
+        root = n._backup_root("t")
+        for i in range(5):
+            (root / f"20260101-00000{i}-abcdef").mkdir(parents=True)
+        (root / "khac").mkdir()
+        n._prune_backups("t", keep=2)
+        self.assertEqual(sorted(d.name for d in root.iterdir()),
+                         ["20260101-000003-abcdef", "20260101-000004-abcdef", "khac"])
+
     def test_longer_names_protected_and_readings_updated(self):
         n = self.names
         md = self.rules / "t" / "novel.md"

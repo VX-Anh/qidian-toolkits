@@ -791,7 +791,10 @@ function App() {
           await replaceGlossRow(slug, target, oldItem).catch(() => {});
           throw err;
         }
-        if (r.files) setToast({ msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success" });
+        if (r.files) setToast({
+          msg: `Đã thay ${r.replaced} chỗ trong ${r.files} chương`, type: "success",
+          action: r.backup_id ? { label: "Hoàn tác", onClick: () => onUndoNames(slug, r.backup_id) } : undefined,
+        });
         await loadChapters(slug);
       }
       await loadGlossary(slug);
@@ -841,9 +844,22 @@ function App() {
       setToast({
         msg: `Đã kiểm ${r.checked} chương: tự sửa ${r.fixed} chỗ, ${r.issues} vấn đề cần xem`,
         type: r.issues ? "info" : "success",
+        action: r.backup_id ? { label: "Hoàn tác", onClick: () => onUndoNames(slug, r.backup_id) } : undefined,
       });
     } catch (err) {
       setToast({ msg: `Lỗi kiểm tên: ${err.message}`, type: "error" });
+    }
+  }
+
+  // Hoàn tác một lần đổi tên / tự sửa tên (máy chủ từ chối nếu file đã đổi sau đó).
+  async function onUndoNames(slug, backupId) {
+    try {
+      const r = await api.post(`/api/names/${encodeURIComponent(slug)}/rename/undo`, { backup_id: backupId });
+      await loadChapters(slug);
+      if (r.novel_md) { await loadGlossary(slug); await loadNovelMd(slug); }
+      setToast({ msg: `Đã hoàn tác ${r.restored} chương`, type: "success" });
+    } catch (err) {
+      setToast({ msg: `Không hoàn tác được: ${err.message}`, type: "error" });
     }
   }
 
@@ -1217,7 +1233,7 @@ function App() {
         onAction={onCmdkAction}
       />
 
-      <Toast message={toast.msg} type={toast.type} onDone={() => setToast({ msg: null })} />
+      <Toast message={toast.msg} type={toast.type} action={toast.action} onDone={() => setToast({ msg: null })} />
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Visual">
