@@ -20,7 +20,7 @@ import anthropic
 from ..config import settings
 from .cli_translator import CliUnavailable, cli_complete
 from .hanviet import has_han, is_name_like, syllables, title_syllable
-from .novel_loader import NovelProfile, append_readings_to_novel, append_terms_to_novel
+from .novel_loader import AUTO_NOTE, NovelProfile, append_readings_to_novel, append_terms_to_novel
 from .rate_limiter import estimate_tokens, get_rate_limiter
 
 KINDS = {
@@ -131,7 +131,7 @@ def normalize(raw: str, profile: NovelProfile, items, chapter_num: int) -> tuple
             table.explicit[c] = r      # áp cho các tên sau trong chương
             new_readings[c] = r
         seen.add(zh)
-        note = f"tự động · chương {chapter_num}" + (f" · {notes[:120]}" if notes else "")
+        note = f"{AUTO_NOTE} {chapter_num}" + (f" · {notes[:120]}" if notes else "")
         names.append(NewName(zh, kind, vi, note.replace("|", "/")))
     return names, new_readings
 

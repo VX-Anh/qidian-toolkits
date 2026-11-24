@@ -372,5 +372,91 @@ class RenameTest(unittest.TestCase):
             n.rename_undo("t", n.UndoRequest(backup_id="../../etc"))
 
 
+A1, A2 = "tự động · chương 1", "tự động · chương 2"
+
+
+class PruneUnusedTest(unittest.TestCase):
+    """Tên dò tự động mà bản dịch không dùng → gỡ khỏi bảng; tên đang dùng / chương chưa
+    dịch xong / dòng người dùng đã sửa → giữ."""
+
+    def setUp(self):
+        from backend.agent.novel_loader import append_terms_to_novel
+        d = Path(tempfile.mkdtemp())
+        self.rules = make_rules(d / "rules")
+        self.inp, self.out = d / "in", d / "out"
+        self.inp.mkdir()
+        self.out.mkdir()
+        self.state = SharedState(str(d / "s.db"))
+        append_terms_to_novel(self.rules, "t", [
+            {"zh": "赵寒山", "vi": "Triệu Hàn Sơn", "type": "character", "notes": "tự động · chương 1"},
+            {"zh": "殷凤池", "vi": "Ân Phượng Trì", "type": "character", "notes": "tự động · chương 1"},
+            {"zh": "龛瑶", "vi": "Khám Dao", "type": "skill", "notes": "tự động · chương 2"},
+            {"zh": "萧城主", "vi": "Tiêu Thành Chủ", "type": "character", "notes": "người dùng sửa"},
+        ])
+
+    def tearDown(self):
+        self.state._conn.close()
+
+    def _chapter(self, num, raw, translated, status=ChapterStatus.DONE):
+        name = f"第{num}章 x.txt"
+        (self.inp / name).write_text(raw, encoding="utf-8")
+        asyncio.run(self.state.upsert_chapter(name, "t", num, "x"))
+        kw = {}
+        if translated is not None:
+            p = self.out / f"{num}.txt"
+            p.write_text(translated, encoding="utf-8")
+            kw["translated_path"] = str(p)
+        asyncio.run(self.state.set_status(name, status, **kw))
+        return self.inp / name
+
+    def _run(self, files, auto):
+        from backend.agent.orchestrator import Orchestrator
+        from backend.agent.state import EventQueue
+        o = Orchestrator("t", self.inp, self.out, self.rules, self.state, EventQueue(), None)
+        o._auto_names = auto
+        asyncio.run(o._prune_unused(files))
+        return {t.zh for t in load_novel(self.rules, "t").all_terms()}
+
+    def test_unused_removed_used_kept(self):
+        f1 = self._chapter(1, "赵寒山看向殷凤池。萧城主。", "Ân phượng trì nhìn sang.")
+        left = self._run([f1], [("赵寒山", "Triệu Hàn Sơn", A1), ("殷凤池", "Ân Phượng Trì", A1),
+                                ("萧城主", "Tiêu Thành Chủ", "người dùng sửa")])
+        self.assertNotIn("赵寒山", left)
+        self.assertIn("殷凤池", left)      # dùng (khác hoa thường vẫn tính)
+        self.assertIn("萧城主", left)      # dòng không phải tự động → không đụng
+        self.assertIn("司奇", left)
+
+    def test_kept_when_a_containing_chapter_not_done(self):
+        f1 = self._chapter(1, "龛瑶。", "Không có.")
+        f2 = self._chapter(2, "龛瑶。", None, status=ChapterStatus.FAILED)
+        self.assertIn("龛瑶", self._run([f1, f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_used_in_another_chapter_kept(self):
+        f1 = self._chapter(1, "龛瑶。", "Không có.")
+        f2 = self._chapter(2, "龛瑶亮。", "Khám Dao sáng lên.")
+        self.assertIn("龛瑶", self._run([f1, f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_done_chapter_outside_batch_protects(self):
+        self._chapter(1, "龛瑶亮。", "Khám Dao sáng lên.")      # không nằm trong lô
+        f2 = self._chapter(2, "龛瑶。", "Không có.")
+        self.assertIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_unaccented_variant_counts_as_used(self):
+        f2 = self._chapter(2, "龛瑶。", "Kham Dao sang len.")
+        self.assertIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_edited_note_protects_row(self):
+        p = self.rules / "t" / "novel.md"
+        p.write_text(p.read_text(encoding="utf-8").replace(
+            "| 龛瑶 | Khám Dao | tự động · chương 2 |", "| 龛瑶 | Khám Dao | tự động · chương 2 · đúng rồi |"),
+            encoding="utf-8")
+        f2 = self._chapter(2, "龛瑶。", "Không có.")
+        self.assertIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+    def test_unused_removed_alone(self):
+        f2 = self._chapter(2, "龛瑶。", "Không có.")
+        self.assertNotIn("龛瑶", self._run([f2], [("龛瑶", "Khám Dao", A2)]))
+
+
 if __name__ == "__main__":
     unittest.main()

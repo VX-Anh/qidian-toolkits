@@ -6,7 +6,8 @@ import anthropic
 
 from ..config import settings
 from .extractor import ExtractorAgent
-from .novel_loader import NovelProfile, load_novel
+from .hanviet import fold
+from .novel_loader import NovelProfile, load_novel, remove_auto_terms
 from .preprocessor import replace_proper_nouns
 from .reviewer import ReviewerAgent
 from .state import ChapterStatus, EventQueue, SharedState
@@ -49,6 +50,7 @@ class Orchestrator:
         self.chapter_filenames = chapter_filenames  # None = dịch tất cả
         self.force = force  # True = dịch lại kể cả chương đã DONE
         self.run_wiki = run_wiki  # False = chỉ dịch, bỏ bước đưa vào Story-Wiki
+        self._auto_names: list[tuple[str, str, str]] = []  # (zh, vi, ghi chú) dò tên vừa thêm
 
     async def run(self):
         try:
@@ -89,6 +91,11 @@ class Orchestrator:
             sem = asyncio.Semaphore(settings.concurrency)
             tasks = [self._translate_one(path, profile, sem) for path in files]
             await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Tên dò tự động mà bản dịch không dùng tới → gỡ khỏi bảng (thường là chữ nhiễu
+            # trong bản gốc, model đã dịch theo ngữ cảnh thành tên khác).
+            if self._auto_names:
+                await self._prune_unused(files)
 
             # Chạy extractor sau khi tất cả đã dịch
             await self._emit("orchestrator", "extracting")
@@ -297,6 +304,7 @@ class Orchestrator:
                 await self._emit("scout", "done", file=path.name,
                                  added=[f"{n.zh} → {n.vi}" for n in added])
                 if added:
+                    self._auto_names += [(n.zh, n.vi, n.notes) for n in added]
                     print(f"[dịch]   + {len(added)} tên mới: {path.name}", flush=True)
                     profile = load_novel(self.rules_dir, self.novel_slug)
             except asyncio.CancelledError:
@@ -306,6 +314,56 @@ class Orchestrator:
                 await self._emit("scout", "error", file=path.name, error=str(exc)[:300])
                 print(f"[dịch]   ! dò tên lỗi: {path.name} — {exc}", flush=True)
         return profile
+
+    async def _prune_unused(self, files: list[Path]) -> None:
+        """Gỡ tên tự thêm mà KHÔNG chương nào chứa nó dùng tới trong bản dịch.
+
+        Xét các chương của lô này và mọi chương ĐÃ DỊCH khác của truyện còn bản gốc. Giữ lại
+        nếu: một chương trong lô chứa tên mà chưa dịch xong (chưa đủ bằng chứng); hoặc một
+        bản dịch bất kỳ có tên đó, so kiểu bỏ dấu (fold) để biến thể chưa kịp sửa (Tu Ky)
+        vẫn tính là đang dùng."""
+        try:
+            batch = {p.name for p in files}
+            paths = list(files)
+            for ch in self.state.get_chapters(self.novel_slug):
+                if ch["filename"] not in batch and ch["status"] == ChapterStatus.DONE:
+                    p = self.input_dir / ch["filename"]
+                    if p.is_file():
+                        paths.append(p)
+            sources: list[tuple[Path, str, dict | None, str | None, bool]] = []
+            for path in paths:
+                ch = self.state.get_chapter(path.name)
+                text = None
+                if ch and ch["status"] == ChapterStatus.DONE and ch.get("translated_path"):
+                    try:
+                        text = fold(Path(ch["translated_path"]).read_text(encoding="utf-8"))
+                    except OSError:
+                        text = None
+                sources.append((path, path.read_text(encoding="utf-8"), ch, text,
+                                path.name in batch))
+            unused = []
+            for zh, vi, notes in self._auto_names:
+                hits = [s for s in sources if zh in s[1]]
+                if not any(s[4] for s in hits):
+                    continue
+                if any(s[4] and s[3] is None for s in hits):
+                    continue   # chương trong lô chưa dịch xong
+                if any(s[3] is not None and fold(vi) in s[3] for s in hits):
+                    continue   # có bản dịch dùng tên này
+                unused.append((zh, vi, notes))
+            removed = remove_auto_terms(self.rules_dir, self.novel_slug, unused)
+            if not removed:
+                return
+            await self._emit("scout", "pruned", removed=[f"{zh} → {vi}" for zh, vi in removed])
+            print(f"[dịch]   − gỡ {len(removed)} tên tự động không dùng: "
+                  + ", ".join(f"{zh}→{vi}" for zh, vi in removed), flush=True)
+            # Kiểm tên lại các chương liên quan để bỏ báo "thiếu tên" của dòng vừa gỡ.
+            gone = {zh for zh, _ in removed}
+            for path, raw, ch, _, _ in sources:
+                if ch and ch["status"] == ChapterStatus.DONE and any(z in raw for z in gone):
+                    await self._check_names(ch, path)
+        except Exception as exc:
+            await self._emit("scout", "error", error=f"gỡ tên không dùng: {str(exc)[:300]}")
 
     async def _check_names(self, chapter: dict, path: Path) -> None:
         """Kiểm + tự sửa tên trong bản dịch vừa lưu (bảng mới nhất). Lỗi không làm hỏng chương."""
